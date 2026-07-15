@@ -1,48 +1,208 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
+<div class="container" style="max-width: 100%; padding: 0 var(--spacing-xl);">
+{% block title %}Dashboard    </div>
+{% endblock %}
 {% block content %}
-<h1>Attendance Dashboard</h1>
+<div class="page-header">
+    <div>
+        <h1>Attendance Dashboard</h1>
+        <p>Track attendance trends and export records.</p>
+    </div>
+    <div>
+        <a href="{{ url_for('export_csv') }}" class="btn" style="background: var(--gradient-primary); color: white; border: none;">
+            <i data-lucide="download"></i> Export CSV
+        </a>
+    </div>
+</div>
 
-<form method="GET" class="filter-form">
-    <label for="date">Date</label>
-    <input type="date" id="date" name="date" value="{{ filter_date }}">
+<div class="card-grid">
+    <div class="stat-card fade-in">
+        <div class="stat-label">Total Students</div>
+        <div class="stat-value">{{ total_students }}</div>
+        <div class="stat-sub">{{ "Active students" if total_students > 0 else "No students registered" }}</div>
+    </div>
+    <div class="stat-card fade-in">
+        <div class="stat-label">Present Today</div>
+        <div class="stat-value">{{ today_present }}</div>
+        <div class="stat-sub">{{ "Students checked in today" if today_present > 0 else "No check-ins yet" }}</div>
+    </div>
+    <div class="stat-card fade-in">
+        <div class="stat-label">Total Records</div>
+        <div class="stat-value">{{ records|length }}</div>
+        <div class="stat-sub">{{ "Attendance records" if records else "No records yet" }}</div>
+    </div>
+</div>
 
-    <label for="student_id">Student</label>
-    <select id="student_id" name="student_id">
-        <option value="">All Students</option>
-        {% for s in students %}
-            <option value="{{ s.student_id }}" {{ "selected" if s.student_id == filter_student else "" }}>
-                {{ s.name }} ({{ s.student_id }})
-            </option>
-        {% endfor %}
-    </select>
+<div class="chart-container" style="max-height: 400px; overflow: hidden;">
+    <h3 style="margin-bottom: var(--spacing-lg); display: flex; align-items: center; gap: var(--spacing-sm);">
+        <i data-lucide="trending-up" style="color: var(--brand-primary);"></i>
+        Weekly Attendance Trend
+    </h3>
+    <canvas id="attendanceChart" height="300"></canvas>
+</div>
 
-    <button type="submit">Filter</button>
-    <a href="{{ url_for('dashboard') }}" class="clear-link">Clear</a>
+<form method="GET" class="panel" style="margin-bottom: var(--spacing-xl);">
+    <h3 style="margin-bottom: var(--spacing-lg); display: flex; align-items: center; gap: var(--spacing-sm);">
+        <i data-lucide="filter" style="color: var(--info);"></i>
+        Filter Records
+    </h3>
+    <div class="d-flex gap-2" style="align-items: end; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 200px;">
+            <label for="date" style="display: block; margin-bottom: var(--spacing-xs); font-weight: 500;">Date</label>
+            <input type="date" name="date" id="date" value="{{ filter_date }}" style="width: 100%;">
+        </div>
+        <div style="flex: 1; min-width: 200px;">
+            <label for="student_id" style="display: block; margin-bottom: var(--spacing-xs); font-weight: 500;">Student</label>
+            <select name="student_id" id="student_id" style="width: 100%;">
+                <option value="">All Students</option>
+                {% for student in students %}
+                    <option value="{{ student.student_id }}" {% if filter_student == student.student_id %}selected{% endif %}>
+                        {{ student.name }} ({{ student.student_id }})
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="display: flex; gap: var(--spacing-sm);">
+            <button type="submit" class="btn" style="background: var(--gradient-primary); color: white; border: none; padding: var(--spacing-sm) var(--spacing-lg);">
+                <i data-lucide="filter"></i> Apply
+            </button>
+            <a href="{{ url_for('dashboard') }}" class="btn" style="padding: var(--spacing-sm) var(--spacing-lg);">
+                <i data-lucide="x"></i> Clear
+            </a>
+        </div>
+    </div>
 </form>
 
-<table class="attendance-table">
-    <thead>
-        <tr>
-            <th>Date</th>
-            <th>Time</th>
-            <th>Student ID</th>
-            <th>Name</th>
-            <th>Confidence</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for record in records %}
-        <tr>
-            <td>{{ record.date }}</td>
-            <td>{{ record.time.strftime('%H:%M:%S') }}</td>
-            <td>{{ record.student.student_id }}</td>
-            <td>{{ record.student.name }}</td>
-            <td>{{ "%.1f"|format(record.confidence * 100) }}%</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5" class="empty-row">No attendance records found.</td></tr>
-        {% endfor %}
-    </tbody>
-</table>
+<div class="panel">
+    <h3 style="margin-bottom: var(--spacing-lg); display: flex; align-items: center; gap: var(--spacing-sm);">
+        <i data-lucide="list" style="color: var(--info);"></i>
+        Recent Attendance
+    </h3>
+    {% if records %}
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">Date</th>
+                        <th style="text-align: left;">Time</th>
+                        <th style="text-align: left;">Student ID</th>
+                        <th style="text-align: left;">Name</th>
+                        <th style="text-align: left;">Confidence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in records %}
+                        <tr style="transition: background-color var(--transition-normal) ease;">
+                            <td>{{ record.date.strftime('%Y-%m-%d') }}</td>
+                            <td>{{ record.time.strftime('%H:%M:%S') }}</td>
+                            <td><code style="background: var(--surface-secondary); padding: 2px 6px; border-radius: var(--radius-sm); font-size: 0.8em;">{{ record.student.student_id }}</code></td>
+                            <td><strong>{{ record.student.name }}</strong></td>
+                            <td>
+                                <div style="display: flex; align-items: center; gap: var(--spacing-xs);">
+                                    <span>{{ "%.1f"|format(record.confidence * 100) }}%</span>
+                                    <div class="confidence-meter" style="width: 80px; height: 6px;">
+                                        <div class="confidence-meter-fill" style="width: {{ record.confidence * 100 if record.confidence * 100 > 0 else 0 }}%;"></div>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div style="text-align: center; padding: var(--spacing-xl); color: var(--text-tertiary);">
+            <i data-lucide="inbox" style="width: 48px; height: 48px; display: block; margin: 0 auto var(--spacing-md); opacity: 0.5;"></i>
+            <p>No attendance records found.</p>
+            {% if not records and not filter_date and not filter_student %}
+                <p style="margin-top: var(--spacing-sm); font-size: 0.9rem;">Try capturing attendance using the camera or uploading a photo.</p>
+            {% endif %}
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Initialize chart with the data passed from the backend
+const ctx = document.getElementById('attendanceChart').getContext('2d');
+const attendanceChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: {{ chart_labels|tojson }},
+        datasets: [{
+            label: 'Daily Attendance',
+            data: {{ chart_values|tojson }},
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4,
+            fill: true,
+            pointBackgroundColor: 'rgb(59, 130, 246)',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 7
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                display: false
+            },
+            tooltip: {
+                backgroundColor: 'var(--surface-card)',
+                titleColor: 'var(--text-primary)',
+                bodyColor: 'var(--text-secondary)',
+                borderColor: 'var(--border-primary)',
+                borderWidth: 1,
+                padding: 12,
+                callbacks: {
+                    label: function(context) {
+                        return `${context.parsed.y} attendees`;
+                    }
+                }
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                ticks: {
+                    precision: 0,
+                    color: 'var(--text-tertiary)'
+                },
+                grid: {
+                    color: 'var(--border-primary)'
+                }
+            },
+            x: {
+                ticks: {
+                    color: 'var(--text-tertiary)'
+                },
+                grid: {
+                    color: 'var(--border-primary)'
+                }
+            }
+        },
+        interaction: {
+            intersect: false,
+            mode: 'index'
+        }
+    }
+});
+
+// Add animation to the chart when it loads
+document.addEventListener('DOMContentLoaded', function() {
+    const chartContainer = document.getElementById('attendanceChart');
+    chartContainer.style.opacity = '0';
+    chartContainer.style.transform = 'translateY(20px)';
+    
+    setTimeout(() => {
+        chartContainer.style.transition = 'opacity 0.8s ease, transform 0.8s ease';
+        chartContainer.style.opacity = '1';
+        chartContainer.style.transform = 'translateY(0)';
+    }, 300);
+});
+</script>
 {% endblock %}

@@ -1,188 +1,309 @@
 """
 app.py
 ------
-Flask application entry point. Defines all routes:
+Flask application entry point.
 
-    GET  /            - home page (student count, model status, quick-start guide)
-    GET  /register     - registration form (upload photos and/or capture via webcam)
-    POST /register     - saves face images for a new student
-    GET  /train          - (re)trains the CNN on all currently registered students
-    GET  /attendance      - take-attendance page (webcam or upload)
-    POST /attendance      - runs face recognition on the submitted image, marks attendance
-    GET  /dashboard        - attendance records, filterable by date and student
+    GET  /                        - overview / home
+    GET  /login, GET/POST /login  - admin password gate (no-op if ADMIN_PASSWORD unset)
+    GET  /logout
+    GET  /register, POST /register - register a student (instant, no training step)
+    GET  /students                 - roster grid (photos, delete)
+    POST /students/<id>/delete
+    GET  /reindex                  - rebuild the embedding gallery from stored photos
+    GET  /attendance, POST /attendance - webcam/upload check-in (open, kiosk-style)
+    GET  /dashboard                - records, filters, 7-day chart      (admin-gated)
+    GET  /dashboard/export.csv     - CSV export                        (admin-gated)
+    GET  /media/<student_id>/<filename> - serves a student's private photo
+    GET  /healthz                  - uptime check
 
-Run with:  python app.py   (then open http://127.0.0.1:5000)
+Run locally with:  python app.py
+Run in production (Docker/HF Spaces) with: gunicorn app:app --bind 0.0.0.0:$PORT
 """
 
 import os
+import io
+import csv
 import json
 import base64
-import io
-from datetime import datetime, date
+import shutil
+from datetime import datetime, date, timedelta
 
 import cv2
 import numpy as np
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import (
+    Flask, render_template, request, redirect, url_for, flash,
+    session, send_file, abort, Response
+)
 from PIL import Image
+from werkzeug.utils import secure_filename
 
+import config
 from database import db, Student, AttendanceRecord
-import model as face_model
+import face_engine
+from auth import login_required, is_logged_in
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///attendance.db"
+app.config["SQLALCHEMY_DATABASE_URI"] = config.SQLALCHEMY_DATABASE_URI
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.secret_key = "dev-secret-key-change-me"  # only used to sign flash messages; fine for a school project
+app.secret_key = config.SECRET_KEY
 
 db.init_app(app)
 
-DATASET_DIR = os.path.join("static", "dataset")
-CONFIDENCE_THRESHOLD = 0.75  # minimum CNN confidence required to mark someone present
+# Run at import time (not just under __main__) so this also works when
+# gunicorn imports `app` directly in production.
+config.ensure_directories()
+with app.app_context():
+    db.create_all()
+
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "bmp"}
 
 
-def sanitize_student_id(student_id):
-    """
-    Sanitize student ID to be safe for filesystem paths.
-    Replace problematic characters like '/' with safe alternatives.
-    """
-    # Replace problematic characters with underscores
-    sanitized = student_id.replace('/', '_').replace('\\', '_').replace(':', '_').replace('|', '_')
-    return sanitized
-
-
-def cleanup_orphaned_students():
-    """
-    Remove student records from the database that don't have corresponding image folders.
-    """
-    students = Student.query.all()
-    for student in students:
-        if not os.path.exists(student.image_folder):
-            # Remove attendance records first due to foreign key constraint
-            AttendanceRecord.query.filter_by(student_pk=student.id).delete()
-            # Remove the student
-            db.session.delete(student)
-            print(f"Removed orphaned student: {student.student_id}")
-    
-    try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        print(f"Error during cleanup: {e}")
-
-
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def decode_data_url(data_url):
-    """
-    Converts a webcam canvas data URL ('data:image/jpeg;base64,...') into a BGR
-    numpy image, the format OpenCV and our model.py functions expect.
-    """
+    """Converts a webcam canvas data URL into a BGR numpy image."""
     header, encoded = data_url.split(",", 1)
     image_bytes = base64.b64decode(encoded)
     pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
 
+def is_allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def sanitize_student_id(raw_id):
+    """Keeps only filesystem/URL-safe characters, since this doubles as a folder name."""
+    return "".join(c for c in raw_id if c.isalnum() or c in "-_")
+
+
+def primary_photo_url(student):
+    """URL to a student's first saved reference photo, or None if unavailable."""
+    try:
+        files = sorted(f for f in os.listdir(student.image_folder)
+                        if os.path.isfile(os.path.join(student.image_folder, f)))
+    except OSError:
+        files = []
+    if not files:
+        return None
+    return url_for("media", student_id=student.student_id, filename=files[0])
+
+
+@app.context_processor
+def inject_globals():
+    return {
+        "auth_enabled": config.AUTH_ENABLED, 
+        "logged_in": is_logged_in(),
+        "max_photo_uploads": config.MAX_PHOTO_UPLOADS
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not config.AUTH_ENABLED:
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        if request.form.get("password", "") == config.ADMIN_PASSWORD:
+            session["logged_in"] = True
+            flash("Welcome back.", "success")
+            return redirect(request.args.get("next") or url_for("index"))
+        flash("Incorrect password.", "error")
+
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.pop("logged_in", None)
+    flash("Logged out.", "success")
+    return redirect(url_for("index"))
+
+
+# ---------------------------------------------------------------------------
+# Core pages
+# ---------------------------------------------------------------------------
 @app.route("/")
 def index():
     student_count = Student.query.count()
-    trained = os.path.exists(face_model.MODEL_PATH)
-    return render_template("index.html", student_count=student_count, trained=trained)
+    present_today = AttendanceRecord.query.filter_by(date=date.today()).count()
+    indexed_count = len(face_engine.load_gallery())
+    return render_template(
+        "index.html",
+        student_count=student_count,
+        present_today=present_today,
+        indexed_count=indexed_count
+    )
+
+
+@app.route("/healthz")
+def healthz():
+    return {"status": "ok"}, 200
 
 
 @app.route("/register", methods=["GET", "POST"])
+@login_required
 def register():
     if request.method == "GET":
         return render_template("register.html")
 
-    student_id = request.form.get("student_id", "").strip()
+    raw_id = request.form.get("student_id", "").strip()
+    student_id = sanitize_student_id(raw_id)
     name = request.form.get("name", "").strip()
 
-    # Validate inputs
     if not student_id or not name:
         flash("Student ID and name are required.", "error")
-        return redirect(url_for("register"))
-
-    # Check for potentially dangerous characters in student_id
-    if '..' in student_id or student_id.startswith('/') or '../' in student_id:
-        flash("Invalid characters in student ID.", "error")
         return redirect(url_for("register"))
 
     if Student.query.filter_by(student_id=student_id).first():
         flash(f"Student ID '{student_id}' is already registered.", "error")
         return redirect(url_for("register"))
 
-    # Sanitize the student ID for filesystem safety
-    sanitized_student_id = sanitize_student_id(student_id)
-    student_folder = os.path.join(DATASET_DIR, sanitized_student_id)
+    student_folder = os.path.join(config.DATASET_DIR, student_id)
     os.makedirs(student_folder, exist_ok=True)
 
+    saved_faces = []
+    warnings = []
     saved_count = 0
 
-    # --- Option A: regular file uploads (<input type="file" name="face_images" multiple>) ---
-    uploaded_files = request.files.getlist("face_images")
-    for f in uploaded_files:
-        if f and f.filename:
-            # Verify it's actually an image file
-            if not f.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-                continue
-            
-            filepath = os.path.join(student_folder, f"upload_{saved_count}.jpg")
-            f.save(filepath)
-            saved_count += 1
+    def handle_image(image_bgr):
+        nonlocal saved_count
+        face = face_engine.detect_face(image_bgr)
+        if face is None:
+            warnings.append("A photo was skipped — no face detected.")
+            return
+        for w in face_engine.assess_quality(face):
+            warnings.append(w)
+        filepath = os.path.join(student_folder, f"photo_{saved_count}.jpg")
+        cv2.imwrite(filepath, image_bgr)
+        saved_faces.append(face)
+        saved_count += 1
 
-    # --- Option B: webcam captures, sent as a JSON array of data URLs ---
+    # Process uploaded files
+    uploaded_files = request.files.getlist("face_images")
+    if len(uploaded_files) > config.MAX_PHOTO_UPLOADS:
+        flash(f"You can upload a maximum of {config.MAX_PHOTO_UPLOADS} photos.", "error")
+        return redirect(url_for("register"))
+
+    for f in uploaded_files:
+        if f and f.filename and is_allowed_file(f.filename):
+            file_bytes = np.frombuffer(f.read(), np.uint8)
+            image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            if image_bgr is not None:
+                handle_image(image_bgr)
+
+    # Process captured images from webcam
     captured_json = request.form.get("captured_images")
     if captured_json:
         try:
-            data_urls = json.loads(captured_json)
-            for data_url in data_urls:
-                if not data_url.startswith('data:image'):
-                    continue  # Skip invalid data URLs
-                image_bgr = decode_data_url(data_url)
-                filepath = os.path.join(student_folder, f"capture_{saved_count}.jpg")
-                cv2.imwrite(filepath, image_bgr)
-                saved_count += 1
-        except (ValueError, KeyError, IndexError, json.JSONDecodeError):
-            pass  # malformed capture data - simply ignore it
+            for data_url in json.loads(captured_json):
+                if isinstance(data_url, str) and data_url.startswith("data:image"):
+                    handle_image(decode_data_url(data_url))
+        except (ValueError, KeyError, json.JSONDecodeError):
+            pass
 
     if saved_count == 0:
-        flash("Please upload or capture at least one face image.", "error")
-        # Clean up the empty folder if it was created
+        flash("No usable face photos were saved — make sure a face is clearly visible and try again.", "error")
         try:
             os.rmdir(student_folder)
         except OSError:
-            pass  # Folder might not be empty or might not exist
+            pass
         return redirect(url_for("register"))
 
     new_student = Student(student_id=student_id, name=name, image_folder=student_folder)
     db.session.add(new_student)
-    try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        flash(f"Error saving student: {str(e)}", "error")
-        # Clean up the folder
-        try:
-            import shutil
-            shutil.rmtree(student_folder)
-        except:
-            pass
-        return redirect(url_for("register"))
+    db.session.commit()
 
+    for face in saved_faces:
+        face_engine.add_photo_to_gallery(student_id, face)
+
+    if student_id != raw_id:
+        flash(f"Student ID simplified to '{student_id}' (letters, numbers, - and _ only).", "warning")
+    flash(f"Registered {name} ({student_id}) with {saved_count} photo(s) — ready for attendance immediately.", "success")
+    if warnings:
+        shown = warnings[:3]
+        flash(" · ".join(shown) + (f" (+{len(warnings) - 3} more)" if len(warnings) > 3 else ""), "warning")
+
+    return redirect(url_for("students"))
+
+
+@app.route("/reindex")
+@login_required
+def reindex():
+    result = face_engine.reindex_gallery()
     flash(
-        f"Registered {name} ({student_id}) with {saved_count} image(s). "
-        f"Don't forget to (re)train the model before taking attendance.",
+        f"Reindexed {result['students_indexed']} student(s) from "
+        f"{result['images_processed']} photo(s) ({result['images_skipped']} skipped).",
         "success"
     )
-    return redirect(url_for("register"))
+    return redirect(url_for("students"))
 
 
-@app.route("/train")
-def train():
-    result = face_model.train_model(epochs=10)
-    if result["success"]:
-        flash(f"{result['message']} (training accuracy: {result['final_accuracy'] * 100:.1f}%)", "success")
-    else:
-        flash(result["message"], "error")
-    return redirect(url_for("index"))
+@app.route("/students")
+@login_required
+def students():
+    all_students = Student.query.order_by(Student.name).all()
+    photos = {}
+    counts = {}
+    
+    for s in all_students:
+        photos[s.student_id] = primary_photo_url(s)
+        try:
+            if s.image_folder and os.path.isdir(s.image_folder):
+                counts[s.student_id] = len(
+                    [f for f in os.listdir(s.image_folder) if os.path.isfile(os.path.join(s.image_folder, f))]
+                )
+            else:
+                counts[s.student_id] = 0
+        except (OSError, PermissionError):
+            counts[s.student_id] = 0
+    
+    return render_template("students.html", students=all_students, photos=photos, counts=counts)
+
+
+@app.route("/students/<student_id>/delete", methods=["POST"])
+@login_required
+def delete_student(student_id):
+    student = Student.query.filter_by(student_id=student_id).first()
+    if student is None:
+        abort(404)
+
+    folder = student.image_folder
+    name = student.name
+    db.session.delete(student)
+    db.session.commit()
+    face_engine.remove_student_from_gallery(student_id)
+    if folder and os.path.isdir(folder):
+        shutil.rmtree(folder, ignore_errors=True)
+
+    flash(f"Removed {name} ({student_id}) and their photos.", "success")
+    return redirect(url_for("students"))
+
+
+@app.route("/media/<student_id>/<filename>")
+def media(student_id, filename):
+    # Photos are intentionally NOT under /static (see face_engine.py docstring).
+    # When an admin password is set, only logged-in admins can fetch photos directly.
+    if config.AUTH_ENABLED and not is_logged_in():
+        abort(404)
+
+    # Validate student_id and filename to prevent directory traversal attacks
+    sanitized_student_id = sanitize_student_id(student_id)
+    if sanitized_student_id != student_id:
+        abort(404)
+        
+    secure_filename_val = secure_filename(filename)
+    if secure_filename_val != filename:
+        abort(404)
+
+    filepath = os.path.join(config.DATASET_DIR, sanitized_student_id, secure_filename_val)
+    if not os.path.isfile(filepath):
+        abort(404)
+    return send_file(filepath)
 
 
 @app.route("/attendance", methods=["GET", "POST"])
@@ -190,7 +311,6 @@ def attendance():
     if request.method == "GET":
         return render_template("attendance.html")
 
-    # Accept either a webcam snapshot (data URL) or a regular file upload
     image_bgr = None
     if request.form.get("snapshot"):
         image_bgr = decode_data_url(request.form["snapshot"])
@@ -199,20 +319,25 @@ def attendance():
         image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
     if image_bgr is None:
-        return render_template("attendance.html", result={"success": False, "message": "No image received. Please capture or upload a photo."})
-
-    prediction = face_model.predict_face(image_bgr, confidence_threshold=CONFIDENCE_THRESHOLD)
-
-    if prediction["student_id"] is None:
         return render_template("attendance.html", result={
-            "success": False,
-            "message": prediction.get("reason", "Face not recognized."),
-            "confidence": prediction["confidence"]
+            "success": False, "message": "No image received — please capture or upload a photo."
         })
 
-    student = Student.query.filter_by(student_id=prediction["student_id"]).first()
+    match = face_engine.match_face(image_bgr)
+
+    if match["student_id"] is None:
+        # Handle case where reason might not be in match dictionary
+        reason = match.get("reason", "Face not recognized.")
+        confidence = match.get("confidence", 0.0)
+        return render_template("attendance.html", result={
+            "success": False,
+            "message": reason,
+            "confidence": confidence
+        })
+
+    student = Student.query.filter_by(student_id=match["student_id"]).first()
     if student is None:
-        return render_template("attendance.html", result={"success": False, "message": "Matched student not found in database."})
+        return render_template("attendance.html", result={"success": False, "message": "Matched student record not found."})
 
     today = date.today()
     already_marked = AttendanceRecord.query.filter_by(student_pk=student.id, date=today).first()
@@ -221,65 +346,88 @@ def attendance():
         message = f"{student.name} was already marked present today at {already_marked.time.strftime('%H:%M:%S')}."
     else:
         record = AttendanceRecord(
-            student_pk=student.id,
-            date=today,
-            time=datetime.now().time(),
-            confidence=prediction["confidence"]
+            student_pk=student.id, date=today, time=datetime.now().time(), confidence=match["confidence"]
         )
         db.session.add(record)
         db.session.commit()
-        message = f"{student.name} marked present (confidence: {prediction['confidence'] * 100:.1f}%)."
+        message = f"Welcome, {student.name}! You're marked present."
 
     return render_template("attendance.html", result={
         "success": True,
         "message": message,
         "student_name": student.name,
-        "confidence": prediction["confidence"]
+        "confidence": match["confidence"],
+        # Only surface the reference photo when the app is running open (no admin
+        # password set) -- otherwise an anonymous kiosk visitor could pull photos
+        # of registered students just by triggering recognition repeatedly.
+        "photo_url": primary_photo_url(student) if not config.AUTH_ENABLED else None
     })
 
 
 @app.route("/dashboard")
+@login_required
 def dashboard():
-    query = AttendanceRecord.query.join(Student)
+    try:
+        query = AttendanceRecord.query.join(Student)
 
-    filter_date = request.args.get("date", "")
-    filter_student = request.args.get("student_id", "")
+        filter_date = request.args.get("date", "")
+        filter_student = request.args.get("student_id", "")
 
-    if filter_date:
-        try:
-            parsed_date = datetime.strptime(filter_date, "%Y-%m-%d").date()
-            query = query.filter(AttendanceRecord.date == parsed_date)
-        except ValueError:
-            pass  # ignore malformed date input, fall through to unfiltered results
+        if filter_date:
+            try:
+                query = query.filter(AttendanceRecord.date == datetime.strptime(filter_date, "%Y-%m-%d").date())
+            except ValueError:
+                pass
+        if filter_student:
+            query = query.filter(Student.student_id == filter_student)
 
-    if filter_student:
-        query = query.filter(Student.student_id == filter_student)
+        records = query.order_by(AttendanceRecord.date.desc(), AttendanceRecord.time.desc()).all()
+        all_students = Student.query.order_by(Student.name).all()
 
-    records = query.order_by(AttendanceRecord.date.desc(), AttendanceRecord.time.desc()).all()
-    all_students = Student.query.order_by(Student.name).all()
+        chart_labels, chart_values = [], []
+        for i in range(6, -1, -1):
+            day = date.today() - timedelta(days=i)
+            chart_labels.append(day.strftime("%a %d"))
+            chart_values.append(AttendanceRecord.query.filter_by(date=day).count())
 
-    return render_template(
-        "dashboard.html",
-        records=records,
-        students=all_students,
-        filter_date=filter_date,
-        filter_student=filter_student
-    )
+        return render_template(
+            "dashboard.html",
+            records=records,
+            students=all_students,
+            filter_date=filter_date,
+            filter_student=filter_student,
+            chart_labels=chart_labels,
+            chart_values=chart_values,
+            today_present=AttendanceRecord.query.filter_by(date=date.today()).count(),
+            total_students=len(all_students)
+        )
+    except Exception as e:
+        flash(f"Error loading dashboard: {str(e)}", "error")
+        return redirect(url_for("index"))
 
 
-@app.route("/diagnose")
-def diagnose():
-    """Diagnostic endpoint to help troubleshoot face detection issues"""
-    import model as face_model
-    face_model.diagnose_face_detection()
-    flash("Face detection diagnosis printed to console. Check terminal output.", "info")
-    return redirect(url_for("index"))
+@app.route("/dashboard/export.csv")
+@login_required
+def export_csv():
+    rows = AttendanceRecord.query.join(Student).order_by(
+        AttendanceRecord.date.desc(), AttendanceRecord.time.desc()
+    ).all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["Date", "Time", "Student ID", "Name", "Confidence"])
+    for r in rows:
+        writer.writerow([r.date, r.time.strftime("%H:%M:%S"), r.student.student_id, r.student.name, f"{r.confidence:.3f}"])
+
+    response = Response(buffer.getvalue(), mimetype="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=attendance_export.csv"
+    return response
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204  # No Content response
 
 
 if __name__ == "__main__":
-    os.makedirs(DATASET_DIR, exist_ok=True)
-    os.makedirs("models", exist_ok=True)
-    with app.app_context():
-        db.create_all()  # creates attendance.db and its tables on first run
-        cleanup_orphaned_students()  # Clean up any orphaned records
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=config.PORT, debug=config.DEBUG)

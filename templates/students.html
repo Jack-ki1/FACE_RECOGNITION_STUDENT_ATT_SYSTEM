@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Students{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Student Roster</h1>
+        <p>Manage registered students and their photos.</p>
+    </div>
+    <div>
+        <a href="{{ url_for('reindex') }}" class="btn" style="background: var(--gradient-primary); color: white; border: none;">
+            <i data-lucide="refresh-cw"></i> Rebuild Index
+        </a>
+        <a href="{{ url_for('register') }}" class="btn" style="background: var(--gradient-success); color: white; border: none; margin-left: var(--spacing-sm);">
+            <i data-lucide="user-plus"></i> Add Student
+        </a>
+    </div>
+</div>
+
+{% if students %}
+    <div class="student-grid">
+        {% for student in students %}
+            <div class="student-card fade-in">
+                {% if photos[student.student_id] %}
+                    <img src="{{ photos[student.student_id] }}" alt="{{ student.name }}" class="student-photo" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"80\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"%239CA3AF\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"8\" r=\"5\"></circle><path d=\"M20 21a8 8 0 1 0-16 0\"></path></svg>';">
+                {% else %}
+                    <div class="student-photo" style="background-color: var(--surface-secondary); display: flex; align-items: center; justify-content: center; border: 2px dashed var(--border-secondary);">
+                        <i data-lucide="user" style="width: 32px; height: 32px; color: var(--text-tertiary);"></i>
+                    </div>
+                {% endif %}
+                
+                <div class="student-info">
+                    <div class="student-name">{{ student.name }}</div>
+                    <div class="student-id">ID: {{ student.student_id }}</div>
+                    <div class="student-created" style="color: var(--text-tertiary); font-size: 0.75rem; margin-bottom: var(--spacing-sm);">
+                        Registered: {{ student.created_at.strftime('%b %d, %Y') }}
+                        {% if counts[student.student_id] %}
+                            • {{ counts[student.student_id] }} photo(s)
+                        {% endif %}
+                    </div>
+                    
+                    <div class="student-actions">
+                        <a href="{{ url_for('register') }}" class="btn" style="background: var(--gradient-primary); color: white; border: none; padding: var(--spacing-xs) var(--spacing-sm); font-size: 0.875rem;">
+                            <i data-lucide="edit"></i> Edit
+                        </a>
+                        
+                        <form method="POST" action="{{ url_for('delete_student', student_id=student.student_id) }}" 
+                              style="display: inline;" 
+                              onsubmit="return confirm('Are you sure you want to delete {{ student.name }} and all their photos? This action cannot be undone.');">
+                            <button type="submit" class="btn" style="background: var(--gradient-error); color: white; border: none; padding: var(--spacing-xs) var(--spacing-sm); font-size: 0.875rem;">
+                                <i data-lucide="trash-2"></i> Delete
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="panel" style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px; text-align: center;">
+        <div style="width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; background: var(--surface-secondary); border-radius: var(--radius-full); margin-bottom: var(--spacing-lg);">
+            <i data-lucide="users" style="width: 40px; height: 40px; color: var(--text-tertiary);"></i>
+        </div>
+        <h3 style="margin-bottom: var(--spacing-md); color: var(--text-secondary);">No Students Registered</h3>
+        <p style="margin-bottom: var(--spacing-lg); color: var(--text-tertiary);">Get started by registering your first student to the attendance system.</p>
+        <a href="{{ url_for('register') }}" class="btn" style="background: var(--gradient-success); color: white; border: none; padding: var(--spacing-sm) var(--spacing-xl); font-weight: 600;">
+            <i data-lucide="user-plus"></i> Register First Student
+        </a>
+    </div>
+{% endif %}
+{% endblock %}

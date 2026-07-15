@@ -1,54 +1,212 @@
 {% extends "base.html" %}
 {% block title %}Take Attendance{% endblock %}
 {% block content %}
-<h1>Take Attendance</h1>
+<div class="page-header">
+    <div>
+        <h1>Take Attendance</h1>
+        <p>Capture or upload a photo to check in.</p>
+    </div>
+</div>
 
 {% if result %}
-    <div class="result-box {{ 'result-success' if result.success else 'result-error' }}">
-        <p>{{ result.message }}</p>
-        {% if result.confidence is defined %}
-            <p><small>Confidence: {{ "%.1f"|format(result.confidence * 100) }}%</small></p>
+    <div class="result-card fade-in">
+        {% if result.success and result.photo_url %}
+            <img src="{{ result.photo_url }}" class="result-photo" alt="{{ result.student_name }}">
+        {% else %}
+            <div class="result-icon">
+                <i data-lucide="{{ 'check' if result.success else 'x' }}"></i>
+            </div>
         {% endif %}
+        <div class="result-text">
+            <p>{{ result.message }}</p>
+            {% if result.confidence is defined %}
+                <small>Match confidence: {{ "%.0f"|format(result.confidence * 100) }}%</small>
+                <div class="confidence-meter" style="margin-top: var(--spacing-sm);">
+                    <div class="confidence-meter-fill" style="width: {{ result.confidence * 100 if result.confidence * 100 > 0 else 0 }}%;"></div>
+                </div>
+            {% endif %}
+        </div>
     </div>
 {% endif %}
 
-<form method="POST" id="attendance-form">
-    <h3>Option A: Upload Photo</h3>
-    <input type="file" name="face_image" accept="image/*">
+<form method="POST" id="attendance-form" class="panel" enctype="multipart/form-data">
+    <h3 style="margin-bottom: var(--spacing-lg); display: flex; align-items: center; gap: var(--spacing-sm);">
+        <i data-lucide="camera" style="color: var(--brand-primary);"></i>
+        Webcam Check-In
+    </h3>
+    <div class="capture-frame">
+        <video id="video" autoplay muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
+        <img id="preview" class="preview" style="display:none; width: 100%; height: 100%; object-fit: cover;">
+        <div class="capture-guide" id="guide">
+            <div style="text-align: center; color: var(--brand-primary);">
+                <i data-lucide="camera" style="width: 32px; height: 32px; margin-bottom: var(--spacing-sm); display: block; margin-left: auto; margin-right: auto;"></i>
+                <p style="margin: 0; font-weight: 500;">Position your face in the frame</p>
+                <small style="display: block; margin-top: var(--spacing-xs); opacity: 0.8;">Make sure your face is well-lit and clearly visible</small>
+            </div>
+        </div>
+    </div>
+    <canvas id="canvas" style="display:none;"></canvas>
 
-    <h3>Option B: Capture from Webcam</h3>
-    <video id="video" width="320" height="240" autoplay muted></video>
-    <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
-    <br>
-    <button type="button" id="capture-btn">📸 Capture & Preview</button>
-    <br>
-    <img id="preview" style="display:none; max-width: 320px; margin-top: 10px;">
+    <div class="capture-controls">
+        <button type="button" id="capture-btn" class="btn" style="background: var(--gradient-primary); color: white; border: none;">
+            <i data-lucide="camera"></i> Capture Photo
+        </button>
+        <button type="button" id="retake-btn" class="btn" style="display: none; background: var(--gradient-warning); color: white; border: none;">
+            <i data-lucide="rotate-ccw"></i> Retake
+        </button>
+    </div>
 
     <input type="hidden" name="snapshot" id="snapshot">
 
-    <br>
-    <button type="submit" class="primary-btn">Check Attendance</button>
+    <h3 class="mt-24" style="display: flex; align-items: center; gap: var(--spacing-sm);">
+        <i data-lucide="upload" style="color: var(--info);"></i>
+        Or Upload a Photo
+    </h3>
+    <div style="position: relative; margin: var(--spacing-md) 0;" onclick="document.getElementById('file-input').click();">
+        <input type="file" name="face_image" id="file-input" accept="image/*" style="position: relative; opacity: 0; height: 80px; width: 100%; cursor: pointer;">
+        <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--border-secondary); border-radius: var(--radius-lg); background: var(--surface-secondary); cursor: pointer;">
+            <div style="text-align: center; color: var(--text-tertiary);">
+                <i data-lucide="cloud-upload" style="width: 24px; height: 24px; display: block; margin: 0 auto var(--spacing-sm);"></i>
+                <span>Click to upload a photo</span>
+            </div>
+        </div>
+    </div>
+    <small style="color: var(--text-tertiary); display: block; margin-top: var(--spacing-xs); text-align: center;">
+        Select a clear photo of your face
+    </small>
+
+    <button type="submit" class="btn-primary btn-block" id="submit-btn" style="height: 3rem; font-size: 1rem; font-weight: 600; margin-top: var(--spacing-xl);">
+        <i data-lucide="scan-face"></i> Check Attendance
+    </button>
 </form>
 
+<div class="panel" style="margin-top: var(--spacing-lg);">
+    <h3 style="margin-bottom: var(--spacing-md); display: flex; align-items: center; gap: var(--spacing-sm);">
+        <i data-lucide="zap" style="color: var(--warning);"></i>
+        How It Works
+    </h3>
+    <div class="d-grid" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--spacing-md);">
+        <div style="display: flex; align-items: flex-start; gap: var(--spacing-sm);">
+            <div style="background: var(--brand-primary); color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.75rem; font-weight: bold;">1</div>
+            <div>
+                <strong>Position Your Face</strong>
+                <p style="margin: var(--spacing-xs) 0 0; color: var(--text-secondary); font-size: 0.9rem;">Position your face in the webcam frame or upload a clear photo</p>
+            </div>
+        </div>
+        <div style="display: flex; align-items: flex-start; gap: var(--spacing-sm);">
+            <div style="background: var(--brand-primary); color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.75rem; font-weight: bold;">2</div>
+            <div>
+                <strong>Capture or Upload</strong>
+                <p style="margin: var(--spacing-xs) 0 0; color: var(--text-secondary); font-size: 0.9rem;">Capture a clear photo or upload an image with your face clearly visible</p>
+            </div>
+        </div>
+        <div style="display: flex; align-items: flex-start; gap: var(--spacing-sm);">
+            <div style="background: var(--brand-primary); color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.75rem; font-weight: bold;">3</div>
+            <div>
+                <strong>Automatic Recognition</strong>
+                <p style="margin: var(--spacing-xs) 0 0; color: var(--text-secondary); font-size: 0.9rem;">The system will recognize your face and mark attendance automatically</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
-const captureBtn = document.getElementById('capture-btn');
-const snapshotInput = document.getElementById('snapshot');
 const preview = document.getElementById('preview');
+const guide = document.getElementById('guide');
+const captureBtn = document.getElementById('capture-btn');
+const retakeBtn = document.getElementById('retake-btn');
+const snapshotInput = document.getElementById('snapshot');
+const form = document.getElementById('attendance-form');
+const submitBtn = document.getElementById('submit-btn');
 
-navigator.mediaDevices.getUserMedia({ video: true })
-    .then(stream => { video.srcObject = stream; })
-    .catch(err => { console.log('Webcam not available:', err); });
+const capture = new FaceCapture(video, canvas);
+capture.start();
 
 captureBtn.addEventListener('click', () => {
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-
+    const dataUrl = capture.capture();
     snapshotInput.value = dataUrl;
     preview.src = dataUrl;
     preview.style.display = 'block';
+    video.style.display = 'none';
+    guide.style.display = 'none';
+    captureBtn.style.display = 'none';
+    retakeBtn.style.display = 'inline-flex';
+    
+    // Show toast notification
+    if (window.showToast) {
+        showToast('Photo captured successfully!', 'success');
+    }
+});
+
+retakeBtn.addEventListener('click', () => {
+    snapshotInput.value = '';
+    preview.style.display = 'none';
+    video.style.display = 'block';
+    guide.style.display = 'block';
+    captureBtn.style.display = 'inline-flex';
+    retakeBtn.style.display = 'none';
+    
+    // Show toast notification
+    if (window.showToast) {
+        showToast('Photo cleared, ready to retake', 'info');
+    }
+});
+
+form.addEventListener('submit', () => {
+    setBusy(submitBtn, 'Checking…');
+});
+
+// Add file upload preview
+document.querySelector('input[name="face_image"]').addEventListener('change', function(e) {
+    if (this.files && this.files[0]) {
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+            snapshotInput.value = e.target.result;
+            preview.src = e.target.result;
+            preview.style.display = 'block';
+            video.style.display = 'none';
+            guide.style.display = 'none';
+            captureBtn.style.display = 'none';
+            retakeBtn.style.display = 'inline-flex';
+        }
+        
+        reader.readAsDataURL(this.files[0]);
+        
+        // Show toast notification
+        if (window.showToast) {
+            showToast('Image uploaded successfully!', 'success');
+        }
+    }
+});
+
+// Add animation to the form elements when they appear
+document.addEventListener('DOMContentLoaded', function() {
+    const elements = document.querySelectorAll('.panel, .page-header, .result-card');
+    elements.forEach((el, index) => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(20px)';
+        setTimeout(() => {
+            el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+            el.style.opacity = '1';
+            el.style.transform = 'translateY(0)';
+        }, index * 100);
+    });
+});
+
+// Add hover effects to buttons
+document.querySelectorAll('.btn').forEach(btn => {
+    btn.addEventListener('mouseenter', function() {
+        this.style.transform = 'translateY(-2px)';
+    });
+    
+    btn.addEventListener('mouseleave', function() {
+        this.style.transform = 'translateY(0)';
+    });
 });
 </script>
 {% endblock %}

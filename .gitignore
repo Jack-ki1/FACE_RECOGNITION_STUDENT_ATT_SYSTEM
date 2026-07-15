@@ -1,0 +1,12 @@
+# Student data -- NEVER commit this. Real face photos and attendance records
+# do not belong in git history, especially on a public Hugging Face Space.
+data/
+instance/
+*.db
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+*.egg-info/
