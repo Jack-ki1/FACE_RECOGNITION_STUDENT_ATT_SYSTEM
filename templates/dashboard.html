@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Attendance Dashboard</h1>
+
+<form method="GET" class="filter-form">
+    <label for="date">Date</label>
+    <input type="date" id="date" name="date" value="{{ filter_date }}">
+
+    <label for="student_id">Student</label>
+    <select id="student_id" name="student_id">
+        <option value="">All Students</option>
+        {% for s in students %}
+            <option value="{{ s.student_id }}" {{ "selected" if s.student_id == filter_student else "" }}>
+                {{ s.name }} ({{ s.student_id }})
+            </option>
+        {% endfor %}
+    </select>
+
+    <button type="submit">Filter</button>
+    <a href="{{ url_for('dashboard') }}" class="clear-link">Clear</a>
+</form>
+
+<table class="attendance-table">
+    <thead>
+        <tr>
+            <th>Date</th>
+            <th>Time</th>
+            <th>Student ID</th>
+            <th>Name</th>
+            <th>Confidence</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for record in records %}
+        <tr>
+            <td>{{ record.date }}</td>
+            <td>{{ record.time.strftime('%H:%M:%S') }}</td>
+            <td>{{ record.student.student_id }}</td>
+            <td>{{ record.student.name }}</td>
+            <td>{{ "%.1f"|format(record.confidence * 100) }}%</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty-row">No attendance records found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

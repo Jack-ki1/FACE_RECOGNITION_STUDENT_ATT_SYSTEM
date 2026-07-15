@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Take Attendance{% endblock %}
+{% block content %}
+<h1>Take Attendance</h1>
+
+{% if result %}
+    <div class="result-box {{ 'result-success' if result.success else 'result-error' }}">
+        <p>{{ result.message }}</p>
+        {% if result.confidence is defined %}
+            <p><small>Confidence: {{ "%.1f"|format(result.confidence * 100) }}%</small></p>
+        {% endif %}
+    </div>
+{% endif %}
+
+<form method="POST" id="attendance-form">
+    <h3>Option A: Upload Photo</h3>
+    <input type="file" name="face_image" accept="image/*">
+
+    <h3>Option B: Capture from Webcam</h3>
+    <video id="video" width="320" height="240" autoplay muted></video>
+    <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
+    <br>
+    <button type="button" id="capture-btn">📸 Capture & Preview</button>
+    <br>
+    <img id="preview" style="display:none; max-width: 320px; margin-top: 10px;">
+
+    <input type="hidden" name="snapshot" id="snapshot">
+
+    <br>
+    <button type="submit" class="primary-btn">Check Attendance</button>
+</form>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const captureBtn = document.getElementById('capture-btn');
+const snapshotInput = document.getElementById('snapshot');
+const preview = document.getElementById('preview');
+
+navigator.mediaDevices.getUserMedia({ video: true })
+    .then(stream => { video.srcObject = stream; })
+    .catch(err => { console.log('Webcam not available:', err); });
+
+captureBtn.addEventListener('click', () => {
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+    snapshotInput.value = dataUrl;
+    preview.src = dataUrl;
+    preview.style.display = 'block';
+});
+</script>
+{% endblock %}

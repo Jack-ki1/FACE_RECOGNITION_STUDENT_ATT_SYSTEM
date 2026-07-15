@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<h1>School Attendance System</h1>
+<p>Face-recognition attendance tracking powered by a CNN (MobileNetV2 transfer learning + OpenCV face detection).</p>
+
+<div class="card-grid">
+    <div class="card">
+        <h3>Registered Students</h3>
+        <p class="big-number">{{ student_count }}</p>
+    </div>
+    <div class="card">
+        <h3>Model Status</h3>
+        <p class="big-number">{{ "Trained ✅" if trained else "Not Trained ⚠️" }}</p>
+    </div>
+</div>
+
+<div class="steps">
+    <h2>Getting Started</h2>
+    <ol>
+        <li><a href="{{ url_for('register') }}">Register</a> at least 2 students (3-5 face photos each works best)</li>
+        <li>Click <a href="{{ url_for('train') }}">Train Model</a> to (re)train the CNN on registered students</li>
+        <li>Go to <a href="{{ url_for('attendance') }}">Take Attendance</a> and capture or upload a photo</li>
+        <li>View results on the <a href="{{ url_for('dashboard') }}">Dashboard</a></li>
+    </ol>
+    <p><small>Tip: retrain the model any time you add or remove students.</small></p>
+</div>
+{% endblock %}

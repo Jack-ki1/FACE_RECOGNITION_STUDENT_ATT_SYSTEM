@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Register Student{% endblock %}
+{% block content %}
+<h1>Register Student</h1>
+<p>Provide a student ID and name, then add a few face photos (3-5 recommended, from slightly different angles).</p>
+
+<form method="POST" enctype="multipart/form-data" id="register-form">
+    <label for="student_id">Student ID</label>
+    <input type="text" id="student_id" name="student_id" placeholder="e.g. STU001" required>
+
+    <label for="name">Full Name</label>
+    <input type="text" id="name" name="name" placeholder="e.g. Jane Doe" required>
+
+    <h3>Option A: Upload Photos</h3>
+    <input type="file" name="face_images" accept="image/*" multiple>
+
+    <h3>Option B: Capture from Webcam</h3>
+    <video id="video" width="320" height="240" autoplay muted></video>
+    <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
+    <br>
+    <button type="button" id="capture-btn">📸 Capture Photo</button>
+    <p><span id="capture-count">0</span> photo(s) captured</p>
+    <div id="thumbnails" class="thumbnails"></div>
+
+    <input type="hidden" name="captured_images" id="captured_images">
+
+    <button type="submit" class="primary-btn">Register Student</button>
+</form>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const captureBtn = document.getElementById('capture-btn');
+const thumbnails = document.getElementById('thumbnails');
+const countLabel = document.getElementById('capture-count');
+const hiddenInput = document.getElementById('captured_images');
+let capturedImages = [];
+
+// Ask for webcam access. If it's denied or unavailable, the file-upload
+// option above still works fine on its own.
+navigator.mediaDevices.getUserMedia({ video: true })
+    .then(stream => { video.srcObject = stream; })
+    .catch(err => { console.log('Webcam not available:', err); });
+
+captureBtn.addEventListener('click', () => {
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+    capturedImages.push(dataUrl);
+    hiddenInput.value = JSON.stringify(capturedImages);
+    countLabel.textContent = capturedImages.length;
+
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.className = 'thumb';
+    thumbnails.appendChild(img);
+});
+</script>
+{% endblock %}
