@@ -38,15 +38,37 @@ Pipeline for a single photo:
 import os
 import json
 import numpy as np
-import cv2
-
 import config
 
-# ---------------------------------------------------------------------------
-# Face detectors (lazy-loaded: the first call pays the cost, later calls reuse
-# the cached instance)
-# ---------------------------------------------------------------------------
-_haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+try:
+    import cv2
+    # Check OpenCV version to handle API differences
+    opencv_version = cv2.__version__.split('.')[0]
+    OPENCV_VERSION_MAJOR = int(opencv_version)
+    
+    if OPENCV_VERSION_MAJOR >= 5:
+        # For OpenCV 5.x, we may need to use alternative approaches
+        # Try to access the Haar Cascade data differently
+        try:
+            # Some installations of OpenCV 5.x may still have the data
+            haarcascades_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml" if hasattr(cv2, 'data') else None
+            if haarcascades_path and os.path.exists(haarcascades_path):
+                _haar_cascade = cv2.CascadeClassifier(haarcascades_path)
+            else:
+                # If we can't find the haarcascade file, set to None
+                _haar_cascade = None
+        except (AttributeError, TypeError):
+            # Handle the case where CascadeClassifier is not available or haarcascades data is missing
+            _haar_cascade = None
+    else:
+        # For OpenCV 4.x and earlier
+        _haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        
+except ImportError:
+    cv2 = None
+    _haar_cascade = None
+    print("[face_engine] OpenCV not available - install with 'pip install opencv-python==4.8.1.78'")
+
 _mtcnn_detector = None
 
 
@@ -68,6 +90,30 @@ def detect_face(image_bgr):
     cropped face region (BGR). Returns None if no face could be found by
     either detector.
     """
+    if cv2 is None:
+        print("[face_engine] OpenCV not available, cannot detect faces")
+        return None
+
+    # If Haar Cascade is not available (OpenCV 5.x issue), go straight to MTCNN
+    if _haar_cascade is None:
+        print("[face_engine] Haar Cascade not available, using MTCNN exclusively")
+        # Use MTCNN as primary detector if OpenCV Haar is unavailable
+        mtcnn = _get_mtcnn()
+        if mtcnn is not None:
+            try:
+                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                results = mtcnn.detect_faces(image_rgb)
+                if results:
+                    best = max(results, key=lambda r: r.get("confidence", 0))
+                    x, y, w, h = best["box"]
+                    x, y = max(0, x), max(0, y)
+                    face = image_bgr[y:y + h, x:x + w]
+                    if face.size > 0:
+                        return face
+            except Exception as e:
+                print(f"[face_engine] MTCNN detection failed: {e}")
+        return None
+        
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     faces = _haar_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
 
@@ -130,7 +176,7 @@ def assess_quality(face_bgr):
 # ---------------------------------------------------------------------------
 def preprocess_face(face_bgr):
     """Resize to IMG_SIZE and normalize the way MobileNetV2 expects (pixels -> [-1, 1])."""
-    from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+    from keras.applications.mobilenet_v2 import preprocess_input
     face_resized = cv2.resize(face_bgr, (config.IMG_SIZE, config.IMG_SIZE))
     face_rgb = cv2.cvtColor(face_resized, cv2.COLOR_BGR2RGB)
     return preprocess_input(face_rgb.astype("float32"))
@@ -149,7 +195,7 @@ def _get_embedder():
     """
     global _embedder
     if _embedder is None:
-        from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2
+        from keras.applications.mobilenet_v2 import MobileNetV2
         _embedder = MobileNetV2(
             input_shape=(config.IMG_SIZE, config.IMG_SIZE, 3),
             include_top=False,

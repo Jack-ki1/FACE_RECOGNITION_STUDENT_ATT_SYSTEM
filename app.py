@@ -13,6 +13,7 @@ Flask application entry point.
     GET  /attendance, POST /attendance - webcam/upload check-in (open, kiosk-style)
     GET  /dashboard                - records, filters, 7-day chart      (admin-gated)
     GET  /dashboard/export.csv     - CSV export                        (admin-gated)
+    GET  /settings, POST /settings - campus geofence location/radius/mode (admin-gated)
     GET  /media/<student_id>/<filename> - serves a student's private photo
     GET  /healthz                  - uptime check
 
@@ -38,8 +39,9 @@ from PIL import Image
 from werkzeug.utils import secure_filename
 
 import config
-from database import db, Student, AttendanceRecord
+from database import db, Student, AttendanceRecord, run_lightweight_migrations
 import face_engine
+import geofence
 from auth import login_required, is_logged_in
 
 app = Flask(__name__)
@@ -54,6 +56,7 @@ db.init_app(app)
 config.ensure_directories()
 with app.app_context():
     db.create_all()
+    run_lightweight_migrations(db.engine)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "bmp"}
 
@@ -92,10 +95,12 @@ def primary_photo_url(student):
 
 @app.context_processor
 def inject_globals():
+    geofence_settings = geofence.load_settings()
     return {
-        "auth_enabled": config.AUTH_ENABLED, 
+        "auth_enabled": config.AUTH_ENABLED,
         "logged_in": is_logged_in(),
-        "max_photo_uploads": config.MAX_PHOTO_UPLOADS
+        "max_photo_uploads": config.MAX_PHOTO_UPLOADS,
+        "geofence_enabled": bool(geofence_settings.get("enabled") and geofence_settings.get("latitude") is not None)
     }
 
 
@@ -309,8 +314,31 @@ def media(student_id, filename):
 @app.route("/attendance", methods=["GET", "POST"])
 def attendance():
     if request.method == "GET":
-        return render_template("attendance.html")
+        return render_template("attendance.html", geofence_settings=geofence.load_settings())
 
+    # --- Location check FIRST: cheap, and no point running face recognition
+    # if the check-in is going to be rejected on location anyway. -----------
+    def parse_float(key):
+        raw = request.form.get(key)
+        try:
+            return float(raw) if raw not in (None, "") else None
+        except ValueError:
+            return None
+
+    latitude = parse_float("latitude")
+    longitude = parse_float("longitude")
+    accuracy = parse_float("accuracy")
+
+    location = geofence.check_location(latitude, longitude, accuracy)
+
+    if location["enabled"] and not location["allowed"]:
+        return render_template("attendance.html", result={
+            "success": False,
+            "message": location["reason"] or "Location verification failed.",
+            "location": location
+        })
+
+    # --- Face recognition ----------------------------------------------------
     image_bgr = None
     if request.form.get("snapshot"):
         image_bgr = decode_data_url(request.form["snapshot"])
@@ -326,7 +354,6 @@ def attendance():
     match = face_engine.match_face(image_bgr)
 
     if match["student_id"] is None:
-        # Handle case where reason might not be in match dictionary
         reason = match.get("reason", "Face not recognized.")
         confidence = match.get("confidence", 0.0)
         return render_template("attendance.html", result={
@@ -346,17 +373,23 @@ def attendance():
         message = f"{student.name} was already marked present today at {already_marked.time.strftime('%H:%M:%S')}."
     else:
         record = AttendanceRecord(
-            student_pk=student.id, date=today, time=datetime.now().time(), confidence=match["confidence"]
+            student_pk=student.id, date=today, time=datetime.now().time(), confidence=match["confidence"],
+            latitude=latitude, longitude=longitude,
+            distance_meters=location["distance_meters"],
+            location_verified=location["verified"] if location["enabled"] else None
         )
         db.session.add(record)
         db.session.commit()
         message = f"Welcome, {student.name}! You're marked present."
+        if location["enabled"] and location["mode"] == "flag" and not location["verified"]:
+            message += " (Flagged: location could not be verified.)"
 
     return render_template("attendance.html", result={
         "success": True,
         "message": message,
         "student_name": student.name,
         "confidence": match["confidence"],
+        "location": location,
         # Only surface the reference photo when the app is running open (no admin
         # password set) -- otherwise an anonymous kiosk visitor could pull photos
         # of registered students just by triggering recognition repeatedly.
@@ -390,6 +423,9 @@ def dashboard():
             chart_labels.append(day.strftime("%a %d"))
             chart_values.append(AttendanceRecord.query.filter_by(date=day).count())
 
+        today_present = AttendanceRecord.query.filter_by(date=date.today()).count()
+        flagged_today = AttendanceRecord.query.filter_by(date=date.today(), location_verified=False).count()
+
         return render_template(
             "dashboard.html",
             records=records,
@@ -398,8 +434,9 @@ def dashboard():
             filter_student=filter_student,
             chart_labels=chart_labels,
             chart_values=chart_values,
-            today_present=AttendanceRecord.query.filter_by(date=date.today()).count(),
-            total_students=len(all_students)
+            today_present=today_present,
+            total_students=len(all_students),
+            flagged_today=flagged_today
         )
     except Exception as e:
         flash(f"Error loading dashboard: {str(e)}", "error")
@@ -415,13 +452,41 @@ def export_csv():
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["Date", "Time", "Student ID", "Name", "Confidence"])
+    writer.writerow(["Date", "Time", "Student ID", "Name", "Confidence", "Distance (m)", "Location Verified"])
     for r in rows:
-        writer.writerow([r.date, r.time.strftime("%H:%M:%S"), r.student.student_id, r.student.name, f"{r.confidence:.3f}"])
+        writer.writerow([
+            r.date, r.time.strftime("%H:%M:%S"), r.student.student_id, r.student.name, f"{r.confidence:.3f}",
+            f"{r.distance_meters:.0f}" if r.distance_meters is not None else "",
+            ("Yes" if r.location_verified else "No") if r.location_verified is not None else "N/A"
+        ])
 
     response = Response(buffer.getvalue(), mimetype="text/csv")
     response.headers["Content-Disposition"] = "attachment; filename=attendance_export.csv"
     return response
+
+
+@app.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings():
+    if request.method == "POST":
+        try:
+            new_settings = {
+                "enabled": request.form.get("enabled") == "on",
+                "latitude": float(request.form["latitude"]),
+                "longitude": float(request.form["longitude"]),
+                "radius_meters": float(request.form.get("radius_meters", 300)),
+                "mode": request.form.get("mode", "strict"),
+                "max_accuracy_meters": float(request.form.get("max_accuracy_meters", 150)),
+            }
+        except (KeyError, ValueError):
+            flash("Please set a location on the map before saving.", "error")
+            return redirect(url_for("settings"))
+
+        geofence.save_settings(new_settings)
+        flash("Campus location settings saved.", "success")
+        return redirect(url_for("settings"))
+
+    return render_template("settings.html", geofence_settings=geofence.load_settings())
 
 
 @app.route("/favicon.ico")

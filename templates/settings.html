@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Campus Settings{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Campus Location</h1>
+        <p>Drag the marker to your campus center, set a radius, and students will only be able to check in from within that area.</p>
+    </div>
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+<form method="POST" class="panel" id="settings-form">
+    <div class="toggle-row">
+        <input type="checkbox" id="enabled" name="enabled" {{ "checked" if geofence_settings.enabled else "" }}>
+        <label for="enabled" style="margin:0;">Enable campus geofencing</label>
+    </div>
+    <div class="field-hint" style="margin-bottom: 8px;">
+        When off, students can check in from anywhere (face recognition still applies).
+    </div>
+
+    <div id="campus-map"></div>
+    <div class="field-hint">
+        <i data-lucide="move" style="width:12px;height:12px; vertical-align:-2px;"></i>
+        Drag the marker, or click anywhere on the map, to set the campus center.
+    </div>
+
+    <div class="capture-controls">
+        <button type="button" id="locate-btn" class="btn-geo"><i data-lucide="crosshair"></i> Use My Current Location</button>
+    </div>
+
+    <input type="hidden" id="latitude" name="latitude" value="{{ geofence_settings.latitude or '' }}">
+    <input type="hidden" id="longitude" name="longitude" value="{{ geofence_settings.longitude or '' }}">
+
+    <div class="field-row mt-24">
+        <div>
+            <label for="radius_meters">Radius (meters)</label>
+            <input type="number" id="radius_meters" name="radius_meters" min="20" max="5000" step="10"
+                   value="{{ geofence_settings.radius_meters }}">
+        </div>
+        <div>
+            <label for="mode">Mode</label>
+            <select id="mode" name="mode">
+                <option value="strict" {{ "selected" if geofence_settings.mode == "strict" }}>Strict — block check-ins outside the fence</option>
+                <option value="flag" {{ "selected" if geofence_settings.mode == "flag" }}>Flag — allow, but mark for review</option>
+            </select>
+        </div>
+    </div>
+
+    <label for="max_accuracy_meters">Minimum GPS accuracy required (meters)</label>
+    <input type="number" id="max_accuracy_meters" name="max_accuracy_meters" min="10" max="2000" step="10"
+           value="{{ geofence_settings.max_accuracy_meters }}">
+    <div class="field-hint">Readings less precise than this are rejected/flagged rather than trusted.</div>
+
+    <button type="submit" class="btn-primary btn-block mt-24"><i data-lucide="save"></i> Save Campus Settings</button>
+</form>
+
+<div class="card glass mt-24">
+    <h3 style="margin-bottom: 10px;"><i data-lucide="info" style="width:14px;height:14px; vertical-align:-2px;"></i> Worth knowing</h3>
+    <p style="font-size: 0.85rem; margin: 0;">
+        Browser GPS can be overridden by dev tools or spoofing apps — this isn't a
+        cryptographic guarantee. Its real strength is combined with face recognition:
+        an attacker needs to fake <em>both</em> the location and the face at once.
+        "Flag" mode is worth using while you dial in your radius, since indoor GPS
+        can drift 50–100m even for someone standing on campus.
+    </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const savedLat = parseFloat(document.getElementById('latitude').value);
+const savedLng = parseFloat(document.getElementById('longitude').value);
+const hasSaved = !isNaN(savedLat) && !isNaN(savedLng);
+
+const startCenter = hasSaved ? [savedLat, savedLng] : [0, 20];
+const startZoom = hasSaved ? 17 : 2;
+
+const map = L.map('campus-map').setView(startCenter, startZoom);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19
+}).addTo(map);
+
+let marker = null;
+let circle = null;
+
+function setPoint(lat, lng) {
+    document.getElementById('latitude').value = lat;
+    document.getElementById('longitude').value = lng;
+
+    if (marker) {
+        marker.setLatLng([lat, lng]);
+    } else {
+        marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+        marker.on('dragend', () => {
+            const pos = marker.getLatLng();
+            setPoint(pos.lat, pos.lng);
+        });
+    }
+
+    const radius = parseFloat(document.getElementById('radius_meters').value) || 300;
+    if (circle) {
+        circle.setLatLng([lat, lng]);
+        circle.setRadius(radius);
+    } else {
+        circle = L.circle([lat, lng], {
+            radius: radius, color: '#2dd4bf', fillColor: '#2dd4bf', fillOpacity: 0.12, weight: 2
+        }).addTo(map);
+    }
+}
+
+if (hasSaved) setPoint(savedLat, savedLng);
+
+map.on('click', (e) => setPoint(e.latlng.lat, e.latlng.lng));
+
+document.getElementById('radius_meters').addEventListener('input', () => {
+    if (circle) circle.setRadius(parseFloat(document.getElementById('radius_meters').value) || 300);
+});
+
+document.getElementById('locate-btn').addEventListener('click', () => {
+    const btn = document.getElementById('locate-btn');
+    setBusy(btn, 'Locating…');
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            setPoint(pos.coords.latitude, pos.coords.longitude);
+            map.setView([pos.coords.latitude, pos.coords.longitude], 17);
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="crosshair"></i> Use My Current Location';
+            lucide.createIcons();
+        },
+        () => {
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="crosshair"></i> Use My Current Location';
+            lucide.createIcons();
+            alert("Couldn't get your location — check your browser's location permission.");
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+});
+
+document.getElementById('settings-form').addEventListener('submit', (e) => {
+    if (!document.getElementById('latitude').value) {
+        e.preventDefault();
+        alert('Please set a location on the map first.');
+    }
+});
+</script>
+{% endblock %}

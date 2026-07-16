@@ -9,7 +9,7 @@
 </div>
 
 {% if result %}
-    <div class="result-card fade-in">
+    <div class="result-card {{ 'ok' if result.success else 'fail' }}">
         {% if result.success and result.photo_url %}
             <img src="{{ result.photo_url }}" class="result-photo" alt="{{ result.student_name }}">
         {% else %}
@@ -21,94 +21,55 @@
             <p>{{ result.message }}</p>
             {% if result.confidence is defined %}
                 <small>Match confidence: {{ "%.0f"|format(result.confidence * 100) }}%</small>
-                <div class="confidence-meter" style="margin-top: var(--spacing-sm);">
-                    <div class="confidence-meter-fill" style="width: {{ result.confidence * 100 if result.confidence * 100 > 0 else 0 }}%;"></div>
+                <div class="confidence-meter">
+                    <div class="confidence-meter-fill" style="width: {{ [result.confidence * 100, 0]|max }}%;"></div>
+                </div>
+            {% endif %}
+            {% if result.location and result.location.enabled and result.location.distance_meters is not none %}
+                <div>
+                    <small>
+                        <i data-lucide="map-pin" style="width:11px;height:11px; vertical-align:-1px;"></i>
+                        {{ result.location.distance_meters|round|int }}m from campus
+                    </small>
                 </div>
             {% endif %}
         </div>
     </div>
 {% endif %}
 
-<form method="POST" id="attendance-form" class="panel" enctype="multipart/form-data">
-    <h3 style="margin-bottom: var(--spacing-lg); display: flex; align-items: center; gap: var(--spacing-sm);">
-        <i data-lucide="camera" style="color: var(--brand-primary);"></i>
-        Webcam Check-In
-    </h3>
+<form method="POST" id="attendance-form" class="panel">
+    <h3>Webcam Check-In</h3>
     <div class="capture-frame">
-        <video id="video" autoplay muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
-        <img id="preview" class="preview" style="display:none; width: 100%; height: 100%; object-fit: cover;">
-        <div class="capture-guide" id="guide">
-            <div style="text-align: center; color: var(--brand-primary);">
-                <i data-lucide="camera" style="width: 32px; height: 32px; margin-bottom: var(--spacing-sm); display: block; margin-left: auto; margin-right: auto;"></i>
-                <p style="margin: 0; font-weight: 500;">Position your face in the frame</p>
-                <small style="display: block; margin-top: var(--spacing-xs); opacity: 0.8;">Make sure your face is well-lit and clearly visible</small>
-            </div>
-        </div>
+        <video id="video" autoplay muted playsinline></video>
+        <img id="preview" class="preview" style="display:none;">
+        <div class="capture-guide" id="guide"></div>
     </div>
     <canvas id="canvas" style="display:none;"></canvas>
 
     <div class="capture-controls">
-        <button type="button" id="capture-btn" class="btn" style="background: var(--gradient-primary); color: white; border: none;">
-            <i data-lucide="camera"></i> Capture Photo
-        </button>
-        <button type="button" id="retake-btn" class="btn" style="display: none; background: var(--gradient-warning); color: white; border: none;">
-            <i data-lucide="rotate-ccw"></i> Retake
-        </button>
+        <button type="button" id="capture-btn" class="btn"><i data-lucide="camera"></i> Capture Photo</button>
+        <button type="button" id="retake-btn" class="btn" style="display:none;"><i data-lucide="rotate-ccw"></i> Retake</button>
     </div>
 
     <input type="hidden" name="snapshot" id="snapshot">
 
-    <h3 class="mt-24" style="display: flex; align-items: center; gap: var(--spacing-sm);">
-        <i data-lucide="upload" style="color: var(--info);"></i>
-        Or Upload a Photo
-    </h3>
-    <div style="position: relative; margin: var(--spacing-md) 0;" onclick="document.getElementById('file-input').click();">
-        <input type="file" name="face_image" id="file-input" accept="image/*" style="position: relative; opacity: 0; height: 80px; width: 100%; cursor: pointer;">
-        <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--border-secondary); border-radius: var(--radius-lg); background: var(--surface-secondary); cursor: pointer;">
-            <div style="text-align: center; color: var(--text-tertiary);">
-                <i data-lucide="cloud-upload" style="width: 24px; height: 24px; display: block; margin: 0 auto var(--spacing-sm);"></i>
-                <span>Click to upload a photo</span>
-            </div>
-        </div>
+    {% if geofence_settings and geofence_settings.enabled %}
+    <div class="geo-status checking" id="geo-status">
+        <span class="geo-dot"></span>
+        <span id="geo-status-text">Checking your location…</span>
     </div>
-    <small style="color: var(--text-tertiary); display: block; margin-top: var(--spacing-xs); text-align: center;">
-        Select a clear photo of your face
-    </small>
+    <input type="hidden" name="latitude" id="latitude">
+    <input type="hidden" name="longitude" id="longitude">
+    <input type="hidden" name="accuracy" id="accuracy">
+    {% endif %}
 
-    <button type="submit" class="btn-primary btn-block" id="submit-btn" style="height: 3rem; font-size: 1rem; font-weight: 600; margin-top: var(--spacing-xl);">
+    <h3 class="mt-24">Or Upload a Photo</h3>
+    <input type="file" name="face_image" accept="image/*">
+
+    <button type="submit" class="btn-primary btn-block mt-24" id="submit-btn">
         <i data-lucide="scan-face"></i> Check Attendance
     </button>
 </form>
-
-<div class="panel" style="margin-top: var(--spacing-lg);">
-    <h3 style="margin-bottom: var(--spacing-md); display: flex; align-items: center; gap: var(--spacing-sm);">
-        <i data-lucide="zap" style="color: var(--warning);"></i>
-        How It Works
-    </h3>
-    <div class="d-grid" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--spacing-md);">
-        <div style="display: flex; align-items: flex-start; gap: var(--spacing-sm);">
-            <div style="background: var(--brand-primary); color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.75rem; font-weight: bold;">1</div>
-            <div>
-                <strong>Position Your Face</strong>
-                <p style="margin: var(--spacing-xs) 0 0; color: var(--text-secondary); font-size: 0.9rem;">Position your face in the webcam frame or upload a clear photo</p>
-            </div>
-        </div>
-        <div style="display: flex; align-items: flex-start; gap: var(--spacing-sm);">
-            <div style="background: var(--brand-primary); color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.75rem; font-weight: bold;">2</div>
-            <div>
-                <strong>Capture or Upload</strong>
-                <p style="margin: var(--spacing-xs) 0 0; color: var(--text-secondary); font-size: 0.9rem;">Capture a clear photo or upload an image with your face clearly visible</p>
-            </div>
-        </div>
-        <div style="display: flex; align-items: flex-start; gap: var(--spacing-sm);">
-            <div style="background: var(--brand-primary); color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.75rem; font-weight: bold;">3</div>
-            <div>
-                <strong>Automatic Recognition</strong>
-                <p style="margin: var(--spacing-xs) 0 0; color: var(--text-secondary); font-size: 0.9rem;">The system will recognize your face and mark attendance automatically</p>
-            </div>
-        </div>
-    </div>
-</div>
 {% endblock %}
 
 {% block scripts %}
@@ -135,11 +96,6 @@ captureBtn.addEventListener('click', () => {
     guide.style.display = 'none';
     captureBtn.style.display = 'none';
     retakeBtn.style.display = 'inline-flex';
-    
-    // Show toast notification
-    if (window.showToast) {
-        showToast('Photo captured successfully!', 'success');
-    }
 });
 
 retakeBtn.addEventListener('click', () => {
@@ -149,64 +105,61 @@ retakeBtn.addEventListener('click', () => {
     guide.style.display = 'block';
     captureBtn.style.display = 'inline-flex';
     retakeBtn.style.display = 'none';
-    
-    // Show toast notification
-    if (window.showToast) {
-        showToast('Photo cleared, ready to retake', 'info');
-    }
 });
 
 form.addEventListener('submit', () => {
     setBusy(submitBtn, 'Checking…');
 });
 
-// Add file upload preview
-document.querySelector('input[name="face_image"]').addEventListener('change', function(e) {
-    if (this.files && this.files[0]) {
-        const reader = new FileReader();
-        
-        reader.onload = function(e) {
-            snapshotInput.value = e.target.result;
-            preview.src = e.target.result;
-            preview.style.display = 'block';
-            video.style.display = 'none';
-            guide.style.display = 'none';
-            captureBtn.style.display = 'none';
-            retakeBtn.style.display = 'inline-flex';
-        }
-        
-        reader.readAsDataURL(this.files[0]);
-        
-        // Show toast notification
-        if (window.showToast) {
-            showToast('Image uploaded successfully!', 'success');
-        }
-    }
-});
+{% if geofence_settings and geofence_settings.enabled %}
+// Request location once on page load -- this is a kiosk-style, one-shot
+// check, not continuous background tracking.
+const geoStatus = document.getElementById('geo-status');
+const geoText = document.getElementById('geo-status-text');
+const RADIUS = {{ geofence_settings.radius_meters }};
 
-// Add animation to the form elements when they appear
-document.addEventListener('DOMContentLoaded', function() {
-    const elements = document.querySelectorAll('.panel, .page-header, .result-card');
-    elements.forEach((el, index) => {
-        el.style.opacity = '0';
-        el.style.transform = 'translateY(20px)';
-        setTimeout(() => {
-            el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
-            el.style.opacity = '1';
-            el.style.transform = 'translateY(0)';
-        }, index * 100);
-    });
-});
+function setGeoStatus(cls, text) {
+    geoStatus.className = 'geo-status ' + cls;
+    geoText.textContent = text;
+}
 
-// Add hover effects to buttons
-document.querySelectorAll('.btn').forEach(btn => {
-    btn.addEventListener('mouseenter', function() {
-        this.style.transform = 'translateY(-2px)';
-    });
-    
-    btn.addEventListener('mouseleave', function() {
-        this.style.transform = 'translateY(0)';
-    });
-});
+function haversine(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const toRad = d => d * Math.PI / 180;
+    const dPhi = toRad(lat2 - lat1);
+    const dLambda = toRad(lng2 - lng1);
+    const a = Math.sin(dPhi/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLambda/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+if (!navigator.geolocation) {
+    setGeoStatus('fail', "Your browser doesn't support location — check-in may be rejected.");
+} else {
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            document.getElementById('latitude').value = pos.coords.latitude;
+            document.getElementById('longitude').value = pos.coords.longitude;
+            document.getElementById('accuracy').value = pos.coords.accuracy;
+
+            const campusLat = {{ geofence_settings.latitude or 'null' }};
+            const campusLng = {{ geofence_settings.longitude or 'null' }};
+            if (campusLat !== null && campusLng !== null) {
+                const dist = haversine(pos.coords.latitude, pos.coords.longitude, campusLat, campusLng);
+                if (dist <= RADIUS) {
+                    setGeoStatus('ok', `On campus (${Math.round(dist)}m from center)`);
+                } else {
+                    setGeoStatus('fail', `${Math.round(dist)}m from campus — outside the ${RADIUS}m radius`);
+                }
+            } else {
+                setGeoStatus('ok', 'Location captured');
+            }
+        },
+        (err) => {
+            setGeoStatus('fail', 'Location permission needed — enable it in your browser to check in.');
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+}
+{% endif %}
 </script>
 {% endblock %}

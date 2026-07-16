@@ -12,10 +12,18 @@ Note on `confidence`: this is now a cosine-similarity score (roughly 0-1,
 occasionally slightly negative for a very bad match) rather than a softmax
 probability, since recognition switched from a trained classifier to
 embedding similarity matching. See face_engine.py for details.
+
+Note on location fields: latitude/longitude/distance_meters/location_verified
+are nullable and only populated when geofencing is enabled (see geofence.py).
+Existing databases from before this feature was added won't have these
+columns -- run_lightweight_migrations() below adds them on startup via plain
+ALTER TABLE statements, so there's no need for a full migration framework
+for a handful of nullable columns on SQLite.
 """
 
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 
 db = SQLAlchemy()
 
@@ -48,5 +56,32 @@ class AttendanceRecord(db.Model):
     time = db.Column(db.Time, nullable=False, default=lambda: datetime.utcnow().time())
     confidence = db.Column(db.Float, nullable=False)  # cosine similarity score at recognition time
 
+    # Populated only when geofencing is enabled (see geofence.py).
+    latitude = db.Column(db.Float, nullable=True)
+    longitude = db.Column(db.Float, nullable=True)
+    distance_meters = db.Column(db.Float, nullable=True)
+    location_verified = db.Column(db.Boolean, nullable=True)  # None = geofencing was off for this check-in
+
     def __repr__(self):
         return f"<AttendanceRecord student_pk={self.student_pk} date={self.date}>"
+
+
+def run_lightweight_migrations(engine):
+    """
+    Adds any columns that exist on the current models but not yet in an
+    existing SQLite database file -- covers upgrading a deployment that
+    predates the geofencing columns, without needing Alembic for four
+    nullable columns. Safe to call every startup; it's a no-op once caught up.
+    """
+    with engine.connect() as conn:
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(attendance_records)"))}
+        new_columns = {
+            "latitude": "FLOAT",
+            "longitude": "FLOAT",
+            "distance_meters": "FLOAT",
+            "location_verified": "BOOLEAN",
+        }
+        for name, col_type in new_columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE attendance_records ADD COLUMN {name} {col_type}"))
+        conn.commit()

@@ -10,24 +10,15 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 </head>
-<body data-theme="light">
+<body>
     <nav class="navbar">
-        <div class="d-flex justify-between align-center">
-            <a href="{{ url_for('index') }}" class="brand">
-                <span class="brand-icon"><i data-lucide="scan-face" style="width:18px;height:18px;"></i></span>
-                Face Attendance
-            </a>
-            
-            <div class="d-flex align-center gap-1">
-                <button id="theme-toggle" class="btn" aria-label="Toggle theme" style="padding: var(--spacing-xs) var(--spacing-sm);">
-                    <i data-lucide="sun" id="theme-icon"></i>
-                </button>
-            </div>
-        </div>
-        
+        <a href="{{ url_for('index') }}" class="brand">
+            <span class="brand-icon"><i data-lucide="scan-face" style="width:18px;height:18px;"></i></span>
+            Face Attendance
+        </a>
         <div class="nav-links">
             <a href="{{ url_for('attendance') }}" class="{{ 'active' if request.endpoint == 'attendance' }}">
-                <i data-lucide="camera"></i> Take Attendance
+                <i data-lucide="camera"></i> Attendance
             </a>
             <a href="{{ url_for('register') }}" class="{{ 'active' if request.endpoint == 'register' }}">
                 <i data-lucide="user-plus"></i> Register
@@ -37,6 +28,9 @@
             </a>
             <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">
                 <i data-lucide="layout-dashboard"></i> Dashboard
+            </a>
+            <a href="{{ url_for('settings') }}" class="{{ 'active' if request.endpoint == 'settings' }}">
+                <i data-lucide="map-pin"></i> Campus
             </a>
             {% if auth_enabled %}
                 {% if logged_in %}
@@ -55,177 +49,15 @@
         {% endfor %}]
     </script>
 
-    <div class="main-content">
+    <main class="container {% block container_class %}{% endblock %}">
         {% block content %}{% endblock %}
-    </div>
+    </main>
 
-    <footer class="app-footer">Face Attendance — CNN-powered attendance tracking</footer>
+    <footer class="app-footer">Face Attendance — CNN recognition + campus geofencing</footer>
 
     <script src="{{ url_for('static', filename='js/toast.js') }}"></script>
     <script src="{{ url_for('static', filename='js/webcam.js') }}"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     {% block scripts %}{% endblock %}
-    <script>
-        lucide.createIcons();
-        
-        // Theme Toggle Functionality
-        const themeToggle = document.getElementById('theme-toggle');
-        const themeIcon = document.getElementById('theme-icon');
-        const body = document.body;
-        
-        // Check for saved theme preference or respect OS setting
-        const savedTheme = localStorage.getItem('theme');
-        const prefersDarkScheme = window.matchMedia('(prefers-color-scheme: dark)');
-        
-        let currentTheme = 'light'; // Changed default to light for better UX
-        if (savedTheme) {
-            currentTheme = savedTheme;
-        } else if (prefersDarkScheme.matches) {
-            currentTheme = 'dark';
-        }
-        
-        body.setAttribute('data-theme', currentTheme);
-        updateThemeIcon(currentTheme);
-        
-        themeToggle.addEventListener('click', () => {
-            currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            body.setAttribute('data-theme', currentTheme);
-            localStorage.setItem('theme', currentTheme);
-            updateThemeIcon(currentTheme);
-            
-            // Update lucide icons after theme change
-            lucide.createIcons();
-        });
-        
-        function updateThemeIcon(theme) {
-            themeIcon.setAttribute('data-lucide', theme === 'dark' ? 'moon' : 'sun');
-        }
-        
-        // Listen for OS theme changes
-        prefersDarkScheme.addEventListener('change', (e) => {
-            if (!localStorage.getItem('theme')) {
-                const newTheme = e.matches ? 'dark' : 'light';
-                body.setAttribute('data-theme', newTheme);
-                updateThemeIcon(newTheme);
-            }
-        });
-        
-        // Smooth scrolling for anchor links
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                const target = document.querySelector(this.getAttribute('href'));
-                if (target) {
-                    target.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
-                }
-            });
-        });
-        
-        // Add ripple effect to buttons
-        document.querySelectorAll('.btn').forEach(button => {
-            button.addEventListener('click', function(e) {
-                // Create ripple element
-                const ripple = document.createElement('span');
-                ripple.classList.add('ripple');
-                
-                // Position ripple at click location
-                const rect = this.getBoundingClientRect();
-                const size = Math.max(rect.width, rect.height);
-                const x = e.clientX - rect.left - size / 2;
-                const y = e.clientY - rect.top - size / 2;
-                
-                ripple.style.width = ripple.style.height = size + 'px';
-                ripple.style.left = x + 'px';
-                ripple.style.top = y + 'px';
-                
-                // Add ripple to button
-                this.appendChild(ripple);
-                
-                // Remove ripple after animation
-                setTimeout(() => {
-                    ripple.remove();
-                }, 600);
-            });
-        });
-        
-        // Add CSS for ripple effect dynamically
-        const style = document.createElement('style');
-        style.textContent = `
-            .ripple {
-                position: absolute;
-                border-radius: 50%;
-                background: rgba(255, 255, 255, 0.6);
-                transform: scale(0);
-                animation: ripple-animation 0.6s linear;
-                pointer-events: none;
-                z-index: 1;
-            }
-            
-            @keyframes ripple-animation {
-                to {
-                    transform: scale(4);
-                    opacity: 0;
-                }
-            }
-        `;
-        document.head.appendChild(style);
-        
-        // Add scroll animations
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: '0px 0px -50px 0px'
-        };
-        
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('slide-up');
-                }
-            });
-        }, observerOptions);
-        
-        // Observe elements that should animate on scroll
-        document.addEventListener('DOMContentLoaded', () => {
-            const animatedElements = document.querySelectorAll('.stat-card, .action-tile, .panel, .student-card');
-            animatedElements.forEach(el => {
-                observer.observe(el);
-            });
-        });
-    </script>
-    
-    <!-- Custom styles for enhanced UI -->
-    <style>
-        /* Add ripple effect styles */
-        .btn {
-            position: relative;
-            overflow: hidden;
-        }
-        
-        /* Enhanced hover effects */
-        .stat-card:hover,
-        .action-tile:hover,
-        .student-card:hover {
-            transform: translateY(-4px) !important;
-        }
-        
-        /* Animation for newly loaded content */
-        .fade-in {
-            animation: fadeIn 0.6s ease-out;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        /* Enhanced focus styles */
-        *:focus {
-            outline: 2px solid var(--brand-primary) !important;
-            outline-offset: 2px !important;
-        }
-    </style>
+    <script>lucide.createIcons();</script>
 </body>
 </html>
