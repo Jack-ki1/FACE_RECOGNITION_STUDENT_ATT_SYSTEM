@@ -65,6 +65,21 @@ MAX_PHOTO_UPLOADS = int(os.environ.get("MAX_PHOTO_UPLOADS", "10"))  # Max photos
 MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", "5")) * 1024 * 1024  # Max photo size in bytes (5MB default)
 DEFAULT_CONFIDENCE_DISPLAY = float(os.environ.get("DEFAULT_CONFIDENCE_DISPLAY", "0.7"))  # Default confidence threshold for UI
 
+# Server-side caps -- MAX_PHOTO_UPLOADS/MAX_PHOTO_SIZE above only meant
+# something if enforced; a client can send any request it likes regardless
+# of what the browser UI restricts, so these are checked in app.py itself,
+# and MAX_CONTENT_LENGTH below is a blanket cap enforced by Flask before a
+# request body is even fully read into memory.
+MAX_CAPTURED_IMAGES = int(os.environ.get("MAX_CAPTURED_IMAGES", "10"))  # webcam captures per registration
+MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH_MB", "25")) * 1024 * 1024  # whole-request cap
+
+# ---------------------------------------------------------------------------
+# Session and Security Settings
+# ---------------------------------------------------------------------------
+SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "3600"))  # Session timeout in seconds (default 1 hour)
+MAX_LOGIN_ATTEMPTS = int(os.environ.get("MAX_LOGIN_ATTEMPTS", "5"))  # Max login attempts before lockout
+LOGIN_LOCKOUT_DURATION = int(os.environ.get("LOGIN_LOCKOUT_DURATION", "900"))  # Lockout duration in seconds (15 minutes)
+
 # ---------------------------------------------------------------------------
 # Geofencing (location-gated attendance)
 # ---------------------------------------------------------------------------
@@ -101,3 +116,15 @@ def ensure_directories():
     """Creates every directory this app writes to, if they don't already exist."""
     os.makedirs(DATASET_DIR, exist_ok=True)
     os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
+
+
+def startup_warnings():
+    """Plain-text warnings printed once at boot -- not exceptions, just nudges."""
+    warnings = []
+    if AUTH_ENABLED and len(ADMIN_PASSWORD) < 8:
+        warnings.append("ADMIN_PASSWORD is shorter than 8 characters -- consider a longer one for a public deployment.")
+    if SECRET_KEY == "dev-secret-key-change-me-in-production":
+        warnings.append("SECRET_KEY is still the default value -- set a random SECRET_KEY before deploying publicly.")
+    if not AUTH_ENABLED:
+        warnings.append("Authentication is disabled -- the system is publicly accessible without login.")
+    return warnings

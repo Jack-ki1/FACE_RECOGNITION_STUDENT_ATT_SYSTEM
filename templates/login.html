@@ -7,6 +7,7 @@
     <p class="subtitle">Enter the admin password to manage students, attendance, and campus settings.</p>
 
     <form method="POST" class="panel">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label for="password">Password</label>
         <input type="password" id="password" name="password" autofocus required>
         <button type="submit" class="btn-primary btn-block mt-24">Log In</button>

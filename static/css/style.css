@@ -53,6 +53,43 @@
     --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+/* Light theme variables */
+.light-theme {
+    --bg: #f8fafc;
+    --bg-elevated: #f1f5f9;
+    --surface: rgba(255, 255, 255, 0.85);
+    --surface-solid: #ffffff;
+    --surface-hover: rgba(241, 245, 249, 0.8);
+    --border: rgba(0, 0, 0, 0.08);
+    --border-strong: rgba(0, 0, 0, 0.16);
+
+    --text: #1e293b;
+    --text-muted: #64748b;
+    --text-faint: #94a3b8;
+
+    --aurora-1: #7c3aed;
+    --aurora-2: #db2777;
+    --aurora-3: #d97706;
+    --aurora-gradient: linear-gradient(120deg, var(--aurora-1) 0%, var(--aurora-2) 55%, var(--aurora-3) 100%);
+    --aurora-gradient-soft: linear-gradient(120deg, rgba(124, 58, 237, 0.16) 0%, rgba(219, 39, 119, 0.14) 55%, rgba(217, 119, 6, 0.12) 100%);
+    --accent: #7c3aed;
+    --accent-soft: rgba(124, 58, 237, 0.14);
+
+    --geo: #0d9488;
+    --geo-soft: rgba(13, 148, 136, 0.14);
+
+    --success: #10b981;
+    --success-bg: rgba(16, 185, 129, 0.12);
+    --danger: #e11d48;
+    --danger-bg: rgba(225, 29, 72, 0.12);
+    --warning: #f59e0b;
+    --warning-bg: rgba(245, 158, 11, 0.12);
+    
+    background-image: radial-gradient(ellipse 900px 500px at 10% -10%, rgba(139, 92, 246, 0.05), transparent 60%),
+                      radial-gradient(ellipse 700px 500px at 100% 0%, rgba(236, 72, 153, 0.03), transparent 55%),
+                      radial-gradient(ellipse 800px 600px at 50% 100%, rgba(245, 158, 11, 0.02), transparent 60%);
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 
@@ -67,6 +104,12 @@ body {
     font-family: var(--font-body);
     line-height: 1.55;
     min-height: 100vh;
+}
+
+.light-theme body {
+    background-image: radial-gradient(ellipse 900px 500px at 10% -10%, rgba(139, 92, 246, 0.05), transparent 60%),
+                      radial-gradient(ellipse 700px 500px at 100% 0%, rgba(236, 72, 153, 0.03), transparent 55%),
+                      radial-gradient(ellipse 800px 600px at 50% 100%, rgba(245, 158, 11, 0.02), transparent 60%);
 }
 
 h1, h2, h3, h4 {
@@ -107,6 +150,10 @@ small { color: var(--text-faint); }
     border-bottom: 1px solid var(--border);
     flex-wrap: wrap;
     gap: 12px;
+}
+
+.light-theme .navbar {
+    background: rgba(255, 255, 255, 0.75);
 }
 
 .navbar .brand {
@@ -438,6 +485,17 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
 .pill-geo-ok { background: var(--geo-soft); color: var(--geo); }
 .pill-geo-fail { background: var(--danger-bg); color: var(--danger); }
 .pill-geo-off { background: rgba(255,255,255,0.06); color: var(--text-faint); }
+.pill-info { background: rgba(167, 139, 250, 0.14); color: var(--accent); }
+.pill-muted { background: rgba(255,255,255,0.06); color: var(--text-faint); }
+
+/* Confidence badge styling */
+.confidence-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
 
 /* ---------------------------------------------------------------------
    Filter bar

@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 
 <form method="POST" class="panel" id="settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="toggle-row">
         <input type="checkbox" id="enabled" name="enabled" {{ "checked" if geofence_settings.enabled else "" }}>
         <label for="enabled" style="margin:0;">Enable campus geofencing</label>

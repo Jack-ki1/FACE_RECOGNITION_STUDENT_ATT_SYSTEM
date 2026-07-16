@@ -104,8 +104,16 @@ class FaceCapture {
         const canvas = this.canvas;
         const ctx = this.ctx;
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        // Guard against a race where video metadata isn't ready yet.
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        if (!w || !h) {
+            // Caller must treat '' as "no image".
+            return '';
+        }
+
+        canvas.width = w;
+        canvas.height = h;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         return canvas.toDataURL('image/jpeg', 0.85);

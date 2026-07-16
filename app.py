@@ -16,6 +16,8 @@ Flask application entry point.
     GET  /settings, POST /settings - campus geofence location/radius/mode (admin-gated)
     GET  /media/<student_id>/<filename> - serves a student's private photo
     GET  /healthz                  - uptime check
+    GET  /api/attendance/stats     - API endpoint for attendance statistics
+    POST /api/attendance/mark      - API endpoint for attendance marking
 
 Run locally with:  python app.py
 Run in production (Docker/HF Spaces) with: gunicorn app:app --bind 0.0.0.0:$PORT
@@ -26,28 +28,54 @@ import io
 import csv
 import json
 import base64
+import binascii
 import shutil
 from datetime import datetime, date, timedelta
+import threading
+import hashlib
+import logging
+import time
+
+# Set environment variable to disable oneDNN optimizations to fix LZ4 library issues
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 import cv2
 import numpy as np
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
-    session, send_file, abort, Response
+    session, send_file, abort, Response, jsonify
 )
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
+from sqlalchemy.exc import IntegrityError
 
 import config
-from database import db, Student, AttendanceRecord, run_lightweight_migrations
+from database import db, Student, AttendanceRecord, run_lightweight_migrations, get_active_students_count, update_last_seen
 import face_engine
 import geofence
-from auth import login_required, is_logged_in
+from auth import (
+    login_required, is_logged_in, check_password, login_limiter,
+    attendance_limiter, client_ip, get_csrf_token, csrf_protect,
+    is_strong_password
+)
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = config.SQLALCHEMY_DATABASE_URI
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_LENGTH  # blanket cap on request body size
 app.secret_key = config.SECRET_KEY
+
+# Session cookie hardening. SECURE is skipped under FLASK_DEBUG (local http mode)
+# dev) since browsers won't set a Secure cookie over plain HTTP anyway.
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = not config.DEBUG
+
+# Hugging Face Spaces (and most PaaS) sit behind a reverse proxy -- without
+# this, request.remote_addr is always the proxy's IP, which would make the
+# rate limiters below either useless or wrongly lock out every visitor at once.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 db.init_app(app)
 
@@ -58,7 +86,55 @@ with app.app_context():
     db.create_all()
     run_lightweight_migrations(db.engine)
 
+for warning in config.startup_warnings():
+    print(f"[app] WARNING: {warning}")
+
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "bmp"}
+
+# Thread lock for database operations to prevent conflicts
+db_lock = threading.Lock()
+
+
+@app.before_request
+def _generate_session_id():
+    """Generate a session ID if one doesn't exist."""
+    if 'session_id' not in session:
+        import uuid
+        session['session_id'] = str(uuid.uuid4())
+    
+    # Ensure session is initialized properly when auth is disabled
+    if not config.AUTH_ENABLED and 'logged_in' not in session:
+        session['logged_in'] = True
+        session['last_activity'] = time.time()
+
+
+@app.before_request
+def _csrf_protect():
+    csrf_protect()
+
+
+@app.after_request
+def _security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Explicit allowlist for the CDNs this app actually loads (fonts, icons,
+    # the map, and the chart library) rather than a blanket allow. Inline
+    # scripts are used throughout the templates for simplicity, hence
+    # 'unsafe-inline' on script-src -- a nonce-based policy would close that
+    # gap for anyone hardening this further.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https://*.tile.openstreetmap.org; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +176,8 @@ def inject_globals():
         "auth_enabled": config.AUTH_ENABLED,
         "logged_in": is_logged_in(),
         "max_photo_uploads": config.MAX_PHOTO_UPLOADS,
-        "geofence_enabled": bool(geofence_settings.get("enabled") and geofence_settings.get("latitude") is not None)
+        "geofence_enabled": bool(geofence_settings.get("enabled") and geofence_settings.get("latitude") is not None),
+        "csrf_token": get_csrf_token
     }
 
 
@@ -112,12 +189,19 @@ def login():
     if not config.AUTH_ENABLED:
         return redirect(url_for("index"))
 
+    ip = client_ip()
+
     if request.method == "POST":
-        if request.form.get("password", "") == config.ADMIN_PASSWORD:
+        if login_limiter.is_limited(ip):
+            flash("Too many failed attempts — please wait a few minutes and try again.", "error")
+        elif check_password(request.form.get("password", "")):
+            login_limiter.reset(ip)
             session["logged_in"] = True
             flash("Welcome back.", "success")
             return redirect(request.args.get("next") or url_for("index"))
-        flash("Incorrect password.", "error")
+        else:
+            login_limiter.record(ip)
+            flash("Incorrect password.", "error")
 
     return render_template("login.html")
 
@@ -184,7 +268,9 @@ def register():
         for w in face_engine.assess_quality(face):
             warnings.append(w)
         filepath = os.path.join(student_folder, f"photo_{saved_count}.jpg")
-        cv2.imwrite(filepath, image_bgr)
+        if not cv2.imwrite(filepath, image_bgr):
+            warnings.append("A photo was skipped — it could not be saved.")
+            return
         saved_faces.append(face)
         saved_count += 1
 
@@ -201,14 +287,24 @@ def register():
             if image_bgr is not None:
                 handle_image(image_bgr)
 
-    # Process captured images from webcam
+    # Process captured images from webcam. The 5-photo cap in register.html's
+    # JS is a UI nicety only -- a request built by hand could send any number
+    # of data URLs, so the real limit is enforced here.
     captured_json = request.form.get("captured_images")
     if captured_json:
         try:
-            for data_url in json.loads(captured_json):
-                if isinstance(data_url, str) and data_url.startswith("data:image"):
+            data_urls = json.loads(captured_json)
+            if isinstance(data_urls, list) and len(data_urls) > config.MAX_CAPTURED_IMAGES:
+                flash(f"You can capture a maximum of {config.MAX_CAPTURED_IMAGES} photos.", "error")
+                return redirect(url_for("register"))
+            for data_url in data_urls:
+                if not (isinstance(data_url, str) and data_url.startswith("data:image")):
+                    continue
+                try:
                     handle_image(decode_data_url(data_url))
-        except (ValueError, KeyError, json.JSONDecodeError):
+                except (ValueError, binascii.Error, UnidentifiedImageError, OSError):
+                    warnings.append("A captured photo was skipped — it could not be read.")
+        except (ValueError, TypeError, json.JSONDecodeError):
             pass
 
     if saved_count == 0:
@@ -221,7 +317,16 @@ def register():
 
     new_student = Student(student_id=student_id, name=name, image_folder=student_folder)
     db.session.add(new_student)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Two requests registered the same student_id at almost the same
+        # moment -- the DB's unique constraint is the real guard here, the
+        # earlier query-based check is just a fast path for the common case.
+        db.session.rollback()
+        shutil.rmtree(student_folder, ignore_errors=True)
+        flash(f"Student ID '{student_id}' was just registered by someone else — please use a different ID.", "error")
+        return redirect(url_for("register"))
 
     for face in saved_faces:
         face_engine.add_photo_to_gallery(student_id, face)
@@ -236,7 +341,7 @@ def register():
     return redirect(url_for("students"))
 
 
-@app.route("/reindex")
+@app.route("/reindex", methods=["POST"])
 @login_required
 def reindex():
     result = face_engine.reindex_gallery()
@@ -316,6 +421,14 @@ def attendance():
     if request.method == "GET":
         return render_template("attendance.html", geofence_settings=geofence.load_settings())
 
+    ip = client_ip()
+    if attendance_limiter.is_limited(ip):
+        return render_template("attendance.html", result={
+            "success": False,
+            "message": "Too many attempts from this device — please wait a minute and try again."
+        })
+    attendance_limiter.record(ip)
+
     # --- Location check FIRST: cheap, and no point running face recognition
     # if the check-in is going to be rejected on location anyway. -----------
     def parse_float(key):
@@ -340,15 +453,18 @@ def attendance():
 
     # --- Face recognition ----------------------------------------------------
     image_bgr = None
-    if request.form.get("snapshot"):
-        image_bgr = decode_data_url(request.form["snapshot"])
-    elif "face_image" in request.files and request.files["face_image"].filename:
-        file_bytes = np.frombuffer(request.files["face_image"].read(), np.uint8)
-        image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    try:
+        if request.form.get("snapshot"):
+            image_bgr = decode_data_url(request.form["snapshot"])
+        elif "face_image" in request.files and request.files["face_image"].filename:
+            file_bytes = np.frombuffer(request.files["face_image"].read(), np.uint8)
+            image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    except (ValueError, binascii.Error, UnidentifiedImageError, OSError):
+        image_bgr = None
 
     if image_bgr is None:
         return render_template("attendance.html", result={
-            "success": False, "message": "No image received — please capture or upload a photo."
+            "success": False, "message": "No usable image received — please capture or upload a clear photo."
         })
 
     match = face_engine.match_face(image_bgr)
@@ -372,17 +488,30 @@ def attendance():
     if already_marked:
         message = f"{student.name} was already marked present today at {already_marked.time.strftime('%H:%M:%S')}."
     else:
+        # Update last seen timestamp
+        update_last_seen(match["student_id"])
+        
         record = AttendanceRecord(
             student_pk=student.id, date=today, time=datetime.now().time(), confidence=match["confidence"],
             latitude=latitude, longitude=longitude,
             distance_meters=location["distance_meters"],
-            location_verified=location["verified"] if location["enabled"] else None
+            location_verified=location["verified"] if location["enabled"] else None,
+            device_info=request.headers.get('User-Agent', '')[:200],  # Limit length
+            ip_address=ip,
+            session_id=session.get('session_id', '')
         )
         db.session.add(record)
-        db.session.commit()
-        message = f"Welcome, {student.name}! You're marked present."
-        if location["enabled"] and location["mode"] == "flag" and not location["verified"]:
-            message += " (Flagged: location could not be verified.)"
+        try:
+            db.session.commit()
+            message = f"Welcome, {student.name}! You're marked present."
+            if location["enabled"] and location["mode"] == "flag" and not location["verified"]:
+                message += " (Flagged: location could not be verified.)"
+        except IntegrityError:
+            # Two near-simultaneous check-ins for the same student today --
+            # the uq_student_date index caught it, so treat it the same as
+            # the "already marked" branch above rather than erroring out.
+            db.session.rollback()
+            message = f"{student.name} was already marked present today."
 
     return render_template("attendance.html", result={
         "success": True,
@@ -417,15 +546,24 @@ def dashboard():
         records = query.order_by(AttendanceRecord.date.desc(), AttendanceRecord.time.desc()).all()
         all_students = Student.query.order_by(Student.name).all()
 
+        # Generate chart data for the past 7 days
         chart_labels, chart_values = [], []
         for i in range(6, -1, -1):
             day = date.today() - timedelta(days=i)
             chart_labels.append(day.strftime("%a %d"))
             chart_values.append(AttendanceRecord.query.filter_by(date=day).count())
 
+        # Get today's stats
         today_present = AttendanceRecord.query.filter_by(date=date.today()).count()
-        flagged_today = AttendanceRecord.query.filter_by(date=date.today(), location_verified=False).count()
+        flagged_today = AttendanceRecord.query.filter(
+            AttendanceRecord.date == date.today(),
+            AttendanceRecord.location_verified == False
+        ).count()
 
+        # Additional statistics
+        total_records = AttendanceRecord.query.count()
+        active_students = get_active_students_count() if 'get_active_students_count' in globals() else len(all_students)
+        
         return render_template(
             "dashboard.html",
             records=records,
@@ -436,11 +574,29 @@ def dashboard():
             chart_values=chart_values,
             today_present=today_present,
             total_students=len(all_students),
-            flagged_today=flagged_today
+            flagged_today=flagged_today,
+            total_records=total_records,
+            active_students=active_students
         )
     except Exception as e:
         flash(f"Error loading dashboard: {str(e)}", "error")
         return redirect(url_for("index"))
+
+
+@app.route("/clear_attendance", methods=["POST"])
+@login_required
+def clear_attendance():
+    """Clear all attendance records."""
+    try:
+        # Delete all attendance records
+        AttendanceRecord.query.delete()
+        db.session.commit()
+        flash("All attendance records have been cleared.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error clearing attendance records: {str(e)}", "error")
+    
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/dashboard/export.csv")
@@ -478,11 +634,11 @@ def settings():
                 "mode": request.form.get("mode", "strict"),
                 "max_accuracy_meters": float(request.form.get("max_accuracy_meters", 150)),
             }
-        except (KeyError, ValueError):
-            flash("Please set a location on the map before saving.", "error")
+            geofence.save_settings(new_settings)
+        except (KeyError, ValueError) as e:
+            flash(str(e) if isinstance(e, ValueError) and str(e) else "Please set a valid location on the map before saving.", "error")
             return redirect(url_for("settings"))
 
-        geofence.save_settings(new_settings)
         flash("Campus location settings saved.", "success")
         return redirect(url_for("settings"))
 
@@ -492,6 +648,250 @@ def settings():
 @app.route("/favicon.ico")
 def favicon():
     return "", 204  # No Content response
+
+
+# ---------------------------------------------------------------------------
+# API Endpoints for enhanced functionality
+# ---------------------------------------------------------------------------
+@app.route("/api/attendance/stats")
+@login_required
+def api_attendance_stats():
+    """API endpoint to get attendance statistics."""
+    try:
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())  # Monday of current week
+        
+        stats = {
+            'today_present': AttendanceRecord.query.filter_by(date=today).count(),
+            'week_total': AttendanceRecord.query.filter(AttendanceRecord.date >= week_start).count(),
+            'total_students': Student.query.count(),
+            'recent_records': []
+        }
+        
+        # Get recent attendance records
+        recent = AttendanceRecord.query.join(Student).order_by(AttendanceRecord.time.desc()).limit(10).all()
+        for record in recent:
+            stats['recent_records'].append({
+                'student_name': record.student.name,
+                'date': record.date.isoformat(),
+                'time': record.time.strftime('%H:%M:%S'),
+                'confidence': record.confidence
+            })
+            
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/attendance/mark", methods=["POST"])
+def api_mark_attendance():
+    """API endpoint for marking attendance programmatically."""
+    ip = client_ip()
+    if attendance_limiter.is_limited(ip):
+        return jsonify({"success": False, "message": "Too many attempts from this device"}), 429
+    
+    attendance_limiter.record(ip)
+    
+    # Verify JSON data
+    if not request.is_json:
+        return jsonify({"success": False, "message": "Request must be JSON"}), 400
+    
+    data = request.get_json()
+    
+    # --- Location check FIRST: cheap, and no point running face recognition
+    # if the check-in is going to be rejected on location anyway. -----------
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    accuracy = data.get("accuracy")
+    
+    location = geofence.check_location(latitude, longitude, accuracy)
+    
+    if location["enabled"] and not location["allowed"]:
+        return jsonify({
+            "success": False,
+            "message": location["reason"] or "Location verification failed.",
+            "location": location
+        }), 403
+
+    # --- Face recognition ----------------------------------------------------
+    image_data = data.get("image_data")  # Base64 encoded image
+    if not image_data:
+        return jsonify({"success": False, "message": "No image data provided"}), 400
+
+    try:
+        # Decode base64 image
+        header, encoded = image_data.split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+        pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return jsonify({"success": False, "message": "Invalid image data"}), 400
+
+    match = face_engine.match_face(image_bgr)
+
+    if match["student_id"] is None:
+        reason = match.get("reason", "Face not recognized.")
+        confidence = match.get("confidence", 0.0)
+        return jsonify({
+            "success": False,
+            "message": reason,
+            "confidence": confidence
+        }), 404
+
+    student = Student.query.filter_by(student_id=match["student_id"]).first()
+    if student is None:
+        return jsonify({"success": False, "message": "Matched student record not found."}), 404
+
+    today = date.today()
+    already_marked = AttendanceRecord.query.filter_by(student_pk=student.id, date=today).first()
+
+    if already_marked:
+        message = f"{student.name} was already marked present today at {already_marked.time.strftime('%H:%M:%S')}."
+        status_code = 200
+    else:
+        with db_lock:  # Use thread lock for database write
+            record = AttendanceRecord(
+                student_pk=student.id, date=today, time=datetime.now().time(), confidence=match["confidence"],
+                latitude=latitude, longitude=longitude,
+                distance_meters=location["distance_meters"],
+                location_verified=location["verified"] if location["enabled"] else None
+            )
+            db.session.add(record)
+            try:
+                db.session.commit()
+                message = f"Welcome, {student.name}! You're marked present."
+                if location["enabled"] and location["mode"] == "flag" and not location["verified"]:
+                    message += " (Flagged: location could not be verified.)"
+                status_code = 201
+            except IntegrityError:
+                # Two near-simultaneous check-ins for the same student today --
+                # the uq_student_date index caught it, so treat it the same as
+                # the "already marked" branch above rather than erroring out.
+                db.session.rollback()
+                message = f"{student.name} was already marked present today."
+                status_code = 200
+
+    return jsonify({
+        "success": True,
+        "message": message,
+        "student_name": student.name,
+        "confidence": match["confidence"],
+        "location": location
+    }), status_code
+
+
+@app.route("/api/face/analyze", methods=["POST"])
+def api_analyze_face():
+    """API endpoint for analyzing face quality before recognition."""
+    try:
+        # Try different ways to get image data
+        image_data = None
+        
+        # Check form data first
+        if request.form.get('image_data'):
+            image_data = request.form.get('image_data')
+        # Then check JSON data
+        elif request.is_json:
+            try:
+                json_data = request.get_json()
+                if json_data and 'image_data' in json_data:
+                    image_data = json_data['image_data']
+            except:
+                pass
+        # Finally, check if it's sent as a direct value
+        elif request.values.get('image_data'):
+            image_data = request.values.get('image_data')
+        
+        if image_data:
+            # Validate that it's a proper data URL
+            if image_data.startswith('data:image/'):
+                try:
+                    # Decode base64 image
+                    header, encoded = image_data.split(",", 1)
+                    image_bytes = base64.b64decode(encoded)
+                    pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                    image_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+                    # Validate for OpenCV consumers
+                    if image_bgr is None or getattr(image_bgr, 'size', 0) == 0:
+                        return jsonify({
+                            'success': False,
+                            'quality_warnings': ['Decoded image is empty/invalid'],
+                            'has_face': False
+                        }), 400
+
+                    # Analyze face quality
+                    analysis_result = face_engine.analyze_face_quality(image_bgr)
+                    
+                    # Some implementations might return plain dict without an explicit HTTP success key.
+                    # Normalize to the frontend shape.
+                    if isinstance(analysis_result, dict) and 'has_face' in analysis_result:
+                        analysis_result.setdefault('success', True)
+                    return jsonify(analysis_result)
+                except Exception as e:
+                    # Return the real exception as JSON so the frontend can display it.
+                    return jsonify({
+                        'success': False,
+                        'quality_warnings': [f'Error processing image: {repr(e)}'],
+                        'has_face': False
+                    }), 400
+            else:
+                return jsonify({
+                    'success': False,
+                    'quality_warnings': ['Invalid image format. Expected data URL starting with data:image/.'],
+                    'has_face': False
+                }), 400
+        else:
+            return jsonify({
+                'success': False,
+                'quality_warnings': ['No image data provided in request'],
+                'has_face': False
+            }), 400
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'quality_warnings': [f'Server error: {str(e)}'],
+            'has_face': False
+        }), 500
+
+
+# ---------------------------------------------------------------------------
+# Enhanced logging and audit trail
+# ---------------------------------------------------------------------------
+def log_action(action, user_ip, details=""):
+    """Log administrative actions for audit trail."""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_entry = f"[{timestamp}] IP: {user_ip}, Action: {action}, Details: {details}\n"
+    
+    log_dir = os.path.join(config.DATA_DIR, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"audit_{date.today().strftime('%Y%m%d')}.log")
+    
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(log_entry)
+
+
+@app.route("/api/logs")
+@login_required
+def view_logs():
+    """Endpoint to view recent audit logs."""
+    log_dir = os.path.join(config.DATA_DIR, "logs")
+    if not os.path.exists(log_dir):
+        return jsonify([])
+    
+    # Get today's log file
+    log_file = os.path.join(log_dir, f"audit_{date.today().strftime('%Y%m%d')}.log")
+    if not os.path.exists(log_file):
+        return jsonify([])
+    
+    try:
+        with open(log_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            # Return last 50 entries
+            recent_logs = lines[-50:] if len(lines) > 50 else lines
+            return jsonify([line.strip() for line in recent_logs])
+    except Exception:
+        return jsonify([])
 
 
 if __name__ == "__main__":

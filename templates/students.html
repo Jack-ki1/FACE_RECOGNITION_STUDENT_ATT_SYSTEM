@@ -7,7 +7,10 @@
         <p>{{ students|length }} registered student(s).</p>
     </div>
     <div class="actions">
-        <a href="{{ url_for('reindex') }}" class="btn"><i data-lucide="refresh-cw"></i> Reindex Photos</a>
+        <form method="POST" action="{{ url_for('reindex') }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn"><i data-lucide="refresh-cw"></i> Reindex Photos</button>
+        </form>
         <a href="{{ url_for('register') }}" class="btn-primary"><i data-lucide="user-plus"></i> Add Student</a>
     </div>
 </div>
@@ -26,6 +29,7 @@
         <div class="badge">{{ counts.get(s.student_id, 0) }} photo(s)</div>
         <form method="POST" action="{{ url_for('delete_student', student_id=s.student_id) }}"
               onsubmit="return confirm('Remove {{ s.name }} and all their photos? This cannot be undone.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn-danger btn-sm btn-block"><i data-lucide="trash-2"></i> Remove</button>
         </form>
     </div>

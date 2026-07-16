@@ -9,6 +9,7 @@
 </div>
 
 <form method="POST" enctype="multipart/form-data" id="register-form" class="panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="student_id">Student ID</label>
     <input type="text" id="student_id" name="student_id" placeholder="e.g. STU001" required>
     <div class="field-hint">Letters, numbers, - and _ only.</div>

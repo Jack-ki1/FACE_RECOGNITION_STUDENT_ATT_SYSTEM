@@ -42,6 +42,30 @@ def load_settings():
 
 
 def save_settings(settings):
+    """
+    Validates before writing -- an admin fat-fingering radius=0 or a
+    latitude outside [-90, 90] would otherwise silently lock every student
+    out (or corrupt the distance math) with no error until someone notices
+    nobody can check in. Raises ValueError with a human-readable message on
+    invalid input; app.py turns that into a flash message.
+    """
+    lat = settings.get("latitude")
+    lng = settings.get("longitude")
+    radius = settings.get("radius_meters")
+    max_accuracy = settings.get("max_accuracy_meters")
+
+    if settings.get("enabled"):
+        if lat is None or lng is None or not math.isfinite(lat) or not math.isfinite(lng):
+            raise ValueError("Campus location must be a valid point on the map.")
+        if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+            raise ValueError("Campus coordinates are out of range.")
+        if radius is None or not math.isfinite(radius) or radius < 10:
+            raise ValueError("Radius must be at least 10 meters.")
+        if max_accuracy is None or not math.isfinite(max_accuracy) or max_accuracy <= 0:
+            raise ValueError("Minimum GPS accuracy must be a positive number.")
+    if settings.get("mode") not in ("strict", "flag"):
+        settings["mode"] = "strict"
+
     config.ensure_directories()
     with open(config.GEOFENCE_SETTINGS_PATH, "w") as f:
         json.dump(settings, f)
@@ -94,8 +118,18 @@ def check_location(latitude, longitude, accuracy=None):
         return {"enabled": True, "allowed": (mode == "flag"), "verified": False,
                 "distance_meters": None, "mode": mode, "reason": reason}
 
+    # A client can submit anything in a form field, including "nan"/"inf",
+    # which Python's float() parses without error -- catch that here rather
+    # than letting it silently produce a nonsensical distance later.
+    valid_numbers = math.isfinite(latitude) and math.isfinite(longitude)
+    in_range = valid_numbers and -90 <= latitude <= 90 and -180 <= longitude <= 180
+    if not in_range:
+        reason = "Location data looked invalid — please try again."
+        return {"enabled": True, "allowed": (mode == "flag"), "verified": False,
+                "distance_meters": None, "mode": mode, "reason": reason}
+
     max_accuracy = settings.get("max_accuracy_meters", 150)
-    if accuracy is not None and accuracy > max_accuracy:
+    if accuracy is not None and math.isfinite(accuracy) and accuracy > max_accuracy:
         reason = f"GPS signal too imprecise (±{accuracy:.0f}m) to verify your location — try moving outdoors or near a window."
         return {"enabled": True, "allowed": (mode == "flag"), "verified": False,
                 "distance_meters": None, "mode": mode, "reason": reason}
