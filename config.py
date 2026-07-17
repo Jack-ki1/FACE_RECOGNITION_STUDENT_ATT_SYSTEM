@@ -21,6 +21,8 @@ and secrets" panel without touching code or rebuilding the image.
 """
 
 import os
+import secrets
+import json
 
 # ---------------------------------------------------------------------------
 # Storage paths
@@ -37,7 +39,7 @@ SQLALCHEMY_DATABASE_URI = f"sqlite:///{DB_PATH}"
 # Face recognition tuning
 # ---------------------------------------------------------------------------
 IMG_SIZE = 96                     # input resolution fed to MobileNetV2
-MATCH_THRESHOLD = float(os.environ.get("MATCH_THRESHOLD", "0.55"))   # min cosine similarity to accept a match
+MATCH_THRESHOLD = float(os.environ.get("MATCH_THRESHOLD", "0.50"))   # min cosine similarity to accept a match
 MATCH_MARGIN = float(os.environ.get("MATCH_MARGIN", "0.05"))         # best match must beat 2nd-best by this much
 BLUR_THRESHOLD = float(os.environ.get("BLUR_THRESHOLD", "60"))       # Laplacian variance floor (lower = more blurry)
 MIN_FACE_SIZE = int(os.environ.get("MIN_FACE_SIZE", "80"))           # px, reject faces smaller than this
@@ -45,9 +47,20 @@ MIN_BRIGHTNESS = float(os.environ.get("MIN_BRIGHTNESS", "40"))       # mean gray
 MAX_BRIGHTNESS = float(os.environ.get("MAX_BRIGHTNESS", "225"))      # mean grayscale intensity ceiling
 
 # ---------------------------------------------------------------------------
+# Performance optimizations
+# ---------------------------------------------------------------------------
+# Reduce the number of face photos required for registration to speed up the process
+MIN_REQUIRED_PHOTOS_FOR_REGISTRATION = int(os.environ.get("MIN_REQUIRED_PHOTOS_FOR_REGISTRATION", "1"))
+
+# Performance tuning for MTCNN (using only supported parameters)
+MTCNN_MIN_FACE_SIZE = int(os.environ.get("MTCNN_MIN_FACE_SIZE", "40"))
+MTCNN_SCALE_FACTOR = float(os.environ.get("MTCNN_SCALE_FACTOR", "0.8"))
+
+# ---------------------------------------------------------------------------
 # App / security
 # ---------------------------------------------------------------------------
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-me-in-production")
+# Generate a secure random key
+SECRET_KEY = os.environ.get('SECRET_KEY', secrets.token_hex(16))
 
 # If ADMIN_PASSWORD is unset, the app runs fully open (matches the original
 # "no auth needed" brief -- convenient for local demos). Set it as a Space
@@ -72,13 +85,6 @@ DEFAULT_CONFIDENCE_DISPLAY = float(os.environ.get("DEFAULT_CONFIDENCE_DISPLAY", 
 # request body is even fully read into memory.
 MAX_CAPTURED_IMAGES = int(os.environ.get("MAX_CAPTURED_IMAGES", "10"))  # webcam captures per registration
 MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH_MB", "25")) * 1024 * 1024  # whole-request cap
-
-# ---------------------------------------------------------------------------
-# Session and Security Settings
-# ---------------------------------------------------------------------------
-SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "3600"))  # Session timeout in seconds (default 1 hour)
-MAX_LOGIN_ATTEMPTS = int(os.environ.get("MAX_LOGIN_ATTEMPTS", "5"))  # Max login attempts before lockout
-LOGIN_LOCKOUT_DURATION = int(os.environ.get("LOGIN_LOCKOUT_DURATION", "900"))  # Lockout duration in seconds (15 minutes)
 
 # ---------------------------------------------------------------------------
 # Geofencing (location-gated attendance)
@@ -125,6 +131,4 @@ def startup_warnings():
         warnings.append("ADMIN_PASSWORD is shorter than 8 characters -- consider a longer one for a public deployment.")
     if SECRET_KEY == "dev-secret-key-change-me-in-production":
         warnings.append("SECRET_KEY is still the default value -- set a random SECRET_KEY before deploying publicly.")
-    if not AUTH_ENABLED:
-        warnings.append("Authentication is disabled -- the system is publicly accessible without login.")
     return warnings

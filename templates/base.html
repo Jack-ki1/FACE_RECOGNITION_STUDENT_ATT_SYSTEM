@@ -9,9 +9,136 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script>
+        // Immediately apply saved theme to prevent flash of default theme
+        (function() {
+            const savedTheme = localStorage.getItem('theme');
+            const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const initialTheme = savedTheme ? savedTheme : (systemPrefersDark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', initialTheme);
+        })();
+    </script>
 </head>
-<body class="{% if request.endpoint != 'login' %}dark-theme{% endif %}">
-    <nav class="navbar">
+<body>
+    <script>lucide.createIcons();</script>
+    <script>
+        // Theme toggle functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const themeToggle = document.getElementById('theme-toggle');
+            
+            // Determine the initial theme
+            const savedTheme = localStorage.getItem('theme');
+            const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const initialTheme = savedTheme ? savedTheme : (systemPrefersDark ? 'dark' : 'light');
+            
+            // Apply the initial theme (double-check in case script runs after inline script)
+            document.documentElement.setAttribute('data-theme', initialTheme);
+            updateThemeIcon(initialTheme);
+            
+            // Add event listener to the toggle button
+            themeToggle.addEventListener('click', function() {
+                const currentTheme = document.documentElement.getAttribute('data-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                
+                document.documentElement.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateThemeIcon(newTheme);
+            });
+            
+            // Function to update icon visibility based on theme
+            function updateThemeIcon(theme) {
+                const sunIcon = themeToggle.querySelector('.sun-icon');
+                const moonIcon = themeToggle.querySelector('.moon-icon');
+                
+                if (theme === 'light') {
+                    // Show moon icon when in light theme (means clicking will switch to dark)
+                    sunIcon.style.display = 'none';
+                    moonIcon.style.display = 'inline';
+                } else {
+                    // Show sun icon when in dark theme (means clicking will switch to light)
+                    sunIcon.style.display = 'inline';
+                    moonIcon.style.display = 'none';
+                }
+            }
+        });
+        
+        // Global loading functions
+        function showGlobalLoader() {
+            document.getElementById('global-loader').style.display = 'flex';
+        }
+        
+        function hideGlobalLoader() {
+            document.getElementById('global-loader').style.display = 'none';
+        }
+        
+        // Add loading effect to navigation links
+        document.querySelectorAll('nav a').forEach(link => {
+            link.addEventListener('click', function() {
+                showGlobalLoader();
+            });
+        });
+    </script>
+    <script>lucide.createIcons();</script>
+    <script>
+        // Theme toggle functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const themeToggle = document.getElementById('theme-toggle');
+            
+            // Determine the initial theme - only apply if not already set by inline script
+            let currentTheme = document.documentElement.getAttribute('data-theme');
+            if (!currentTheme) {
+                const savedTheme = localStorage.getItem('theme');
+                const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                currentTheme = savedTheme ? savedTheme : (systemPrefersDark ? 'dark' : 'light');
+                document.documentElement.setAttribute('data-theme', currentTheme);
+            }
+            
+            updateThemeIcon(currentTheme);
+            
+            // Add event listener to the toggle button
+            themeToggle.addEventListener('click', function() {
+                const currentTheme = document.documentElement.getAttribute('data-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                
+                document.documentElement.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateThemeIcon(newTheme);
+            });
+            
+            // Function to update icon visibility based on theme
+            function updateThemeIcon(theme) {
+                const sunIcon = themeToggle.querySelector('.sun-icon');
+                const moonIcon = themeToggle.querySelector('.moon-icon');
+                
+                if (theme === 'light') {
+                    // Show moon icon when in light theme (means clicking will switch to dark)
+                    sunIcon.style.display = 'none';
+                    moonIcon.style.display = 'inline';
+                } else {
+                    // Show sun icon when in dark theme (means clicking will switch to light)
+                    sunIcon.style.display = 'inline';
+                    moonIcon.style.display = 'none';
+                }
+            }
+        });
+        
+        // Global loading functions
+        function showGlobalLoader() {
+            document.getElementById('global-loader').style.display = 'flex';
+        }
+        
+        function hideGlobalLoader() {
+            document.getElementById('global-loader').style.display = 'none';
+        }
+        
+        // Add loading effect to navigation links
+        document.querySelectorAll('nav a').forEach(link => {
+            link.addEventListener('click', function() {
+                showGlobalLoader();
+            });
+        });
+    </script>
+       <nav class="navbar">
         <a href="{{ url_for('index') }}" class="brand">
             <span class="brand-icon"><i data-lucide="scan-face" style="width:18px;height:18px;"></i></span>
             Face Attendance
@@ -40,11 +167,20 @@
                 {% endif %}
             {% endif %}
             <!-- Theme Toggle Button -->
-            <button id="theme-toggle" class="btn" onclick="toggleTheme()" title="Toggle theme" style="padding: 8px 10px;">
-                <i data-lucide="sun" id="theme-icon"></i>
+            <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle theme">
+                <i data-lucide="sun" class="theme-icon sun-icon"></i>
+                <i data-lucide="moon" class="theme-icon moon-icon"></i>
             </button>
         </div>
     </nav>
+
+    <!-- Global loading indicator -->
+    <div id="global-loader" style="display: none;" class="loader-overlay">
+        <div class="loader-spinner">
+            <i data-lucide="loader" class="loader-icon"></i>
+            <p>Loading...</p>
+        </div>
+    </div>
 
     <div id="toast-stack"></div>
     <script type="application/json" id="flash-data">
@@ -62,52 +198,62 @@
     <script src="{{ url_for('static', filename='js/toast.js') }}"></script>
     <script src="{{ url_for('static', filename='js/webcam.js') }}"></script>
     {% block scripts %}{% endblock %}
+    <script>lucide.createIcons();</script>
     <script>
-        lucide.createIcons();
-        
         // Theme toggle functionality
-        function toggleTheme() {
-            const body = document.body;
-            const themeIcon = document.getElementById('theme-icon');
-            
-            const isLight = body.classList.contains('light-theme');
-            body.classList.toggle('light-theme', !isLight);
-            body.classList.toggle('dark-theme', isLight);
-            
-            const nextTheme = isLight ? 'dark' : 'light';
-            localStorage.setItem('theme', nextTheme);
-            
-            // For light-theme show moon icon; for dark-theme show sun icon.
-            themeIcon.setAttribute('data-lucide', isLight ? 'sun' : 'moon');
-            lucide.createIcons();
-        }
-
-        // Set up the click event for the theme toggle button
-        document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
-
-        // Initialize theme based on preference
         document.addEventListener('DOMContentLoaded', function() {
+            const themeToggle = document.getElementById('theme-toggle');
+            
+            // Determine the initial theme
             const savedTheme = localStorage.getItem('theme');
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            const body = document.body;
-            const themeIcon = document.getElementById('theme-icon');
+            const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const initialTheme = savedTheme ? savedTheme : (systemPrefersDark ? 'dark' : 'light');
             
-            if (savedTheme === 'light') {
-                body.classList.add('light-theme');
-                themeIcon.setAttribute('data-lucide', 'moon');
-            } else if (savedTheme === 'dark') {
-                body.classList.add('dark-theme');
-                themeIcon.setAttribute('data-lucide', 'sun');
-            } else if (prefersDark) {
-                body.classList.add('dark-theme');
-                themeIcon.setAttribute('data-lucide', 'sun');
-            } else {
-                // Default to dark theme if no preference is set
-                body.classList.add('dark-theme');
-                themeIcon.setAttribute('data-lucide', 'sun');
+            // Apply the initial theme (double-check in case script runs after inline script)
+            document.documentElement.setAttribute('data-theme', initialTheme);
+            updateThemeIcon(initialTheme);
+            
+            // Add event listener to the toggle button
+            themeToggle.addEventListener('click', function() {
+                const currentTheme = document.documentElement.getAttribute('data-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                
+                document.documentElement.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateThemeIcon(newTheme);
+            });
+            
+            // Function to update icon visibility based on theme
+            function updateThemeIcon(theme) {
+                const sunIcon = themeToggle.querySelector('.sun-icon');
+                const moonIcon = themeToggle.querySelector('.moon-icon');
+                
+                if (theme === 'light') {
+                    // Show moon icon when in light theme (means clicking will switch to dark)
+                    sunIcon.style.display = 'none';
+                    moonIcon.style.display = 'inline';
+                } else {
+                    // Show sun icon when in dark theme (means clicking will switch to light)
+                    sunIcon.style.display = 'inline';
+                    moonIcon.style.display = 'none';
+                }
             }
-            
-            lucide.createIcons(); // Initialize icons
+        });
+        
+        // Global loading functions
+        function showGlobalLoader() {
+            document.getElementById('global-loader').style.display = 'flex';
+        }
+        
+        function hideGlobalLoader() {
+            document.getElementById('global-loader').style.display = 'none';
+        }
+        
+        // Add loading effect to navigation links
+        document.querySelectorAll('nav a').forEach(link => {
+            link.addEventListener('click', function() {
+                showGlobalLoader();
+            });
         });
     </script>
 </body>

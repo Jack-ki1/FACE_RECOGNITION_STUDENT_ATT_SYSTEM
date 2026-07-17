@@ -10,10 +10,6 @@
     <div class="actions">
         <a href="{{ url_for('settings') }}" class="btn"><i data-lucide="map-pin"></i> Campus Settings</a>
         <a href="{{ url_for('export_csv') }}" class="btn"><i data-lucide="download"></i> Export CSV</a>
-        <form method="POST" action="{{ url_for('clear_attendance') }}" style="display:inline;" onsubmit="return confirm('Are you sure you want to clear ALL attendance records? This cannot be undone.')">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-danger"><i data-lucide="trash-2"></i> Clear All</button>
-        </form>
     </div>
 </div>
 
@@ -40,20 +36,6 @@
         <div class="stat-sub">check-ins outside the campus geofence</div>
     </div>
 
-    <div class="bento-tile span-6">
-        <div class="tile-icon"><i data-lucide="users"></i></div>
-        <div class="stat-label">Active Students</div>
-        <div class="stat-value">{{ active_students or 0 }}</div>
-        <div class="stat-sub">attended in last 30 days</div>
-    </div>
-
-    <div class="bento-tile span-6">
-        <div class="tile-icon"><i data-lucide="file-text"></i></div>
-        <div class="stat-label">Total Records</div>
-        <div class="stat-value">{{ total_records or 0 }}</div>
-        <div class="stat-sub">overall attendance history</div>
-    </div>
-
     <div class="bento-tile span-12">
         <h2>Last 7 Days</h2>
         <div class="chart-card"><canvas id="attendanceChart"></canvas></div>
@@ -77,7 +59,7 @@
         </select>
     </div>
     <button type="submit" class="btn-primary">Filter</button>
-    <a href="{{ url_for('dashboard') }}" class="btn">Clear Filters</a>
+    <a href="{{ url_for('dashboard') }}" class="btn">Clear</a>
 </form>
 
 <div class="table-wrap">
@@ -90,7 +72,6 @@
                 <th>Name</th>
                 <th>Confidence</th>
                 <th>Location</th>
-                <th>Device</th>
             </tr>
         </thead>
         <tbody>
@@ -100,11 +81,7 @@
                 <td>{{ record.time.strftime('%H:%M:%S') }}</td>
                 <td>{{ record.student.student_id }}</td>
                 <td>{{ record.student.name }}</td>
-                <td>
-                    <span class="confidence-badge" style="background: {{ 'rgba(34, 197, 94, 0.15)' if record.confidence >= 0.7 else 'rgba(239, 68, 68, 0.15)' }}">
-                        {{ "%.0f"|format(record.confidence * 100) }}%
-                    </span>
-                </td>
+                <td>{{ "%.0f"|format(record.confidence * 100) }}%</td>
                 <td>
                     {% if record.location_verified is none %}
                         <span class="pill pill-geo-off">Off</span>
@@ -116,16 +93,9 @@
                         </span>
                     {% endif %}
                 </td>
-                <td>
-                    {% if record.device_info %}
-                        <span class="pill pill-info">{{ record.device_info[:20] }}{% if record.device_info|length > 20 %}...{% endif %}</span>
-                    {% else %}
-                        <span class="pill pill-muted">Unknown</span>
-                    {% endif %}
-                </td>
             </tr>
             {% else %}
-            <tr><td colspan="7" class="empty-state">No attendance records found.</td></tr>
+            <tr><td colspan="6" class="empty-state">No attendance records found.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -135,39 +105,6 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
-// Theme toggle functionality
-function toggleTheme() {
-    const isDark = document.body.classList.contains('dark-theme');
-    if (isDark) {
-        document.body.classList.remove('dark-theme');
-        localStorage.setItem('theme', 'light');
-        document.getElementById('theme-icon').innerHTML = '<i data-lucide="moon"></i>';
-        document.getElementById('theme-text').textContent = 'Dark Mode';
-    } else {
-        document.body.classList.add('dark-theme');
-        localStorage.setItem('theme', 'dark');
-        document.getElementById('theme-icon').innerHTML = '<i data-lucide="sun"></i>';
-        document.getElementById('theme-text').textContent = 'Light Mode';
-    }
-    lucide.createIcons(); // Refresh icons after theme change
-}
-
-// Initialize theme based on preference
-document.addEventListener('DOMContentLoaded', function() {
-    const savedTheme = localStorage.getItem('theme');
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    
-    if (savedTheme === 'dark' || (!savedTheme && prefersDark)) {
-        document.body.classList.add('dark-theme');
-        document.getElementById('theme-icon').innerHTML = '<i data-lucide="sun"></i>';
-        document.getElementById('theme-text').textContent = 'Light Mode';
-    } else {
-        document.getElementById('theme-icon').innerHTML = '<i data-lucide="moon"></i>';
-        document.getElementById('theme-text').textContent = 'Dark Mode';
-    }
-    lucide.createIcons(); // Initialize icons
-});
-
 const ctx = document.getElementById('attendanceChart');
 new Chart(ctx, {
     type: 'bar',
@@ -182,38 +119,16 @@ new Chart(ctx, {
                 g.addColorStop(1, 'rgba(236, 72, 153, 0.55)');
                 return g;
             },
-            borderColor: 'rgba(139, 92, 246, 1)',
-            borderWidth: 1,
             borderRadius: 6,
             maxBarThickness: 42
         }]
     },
     options: {
         responsive: true,
-        plugins: { 
-            legend: { display: false },
-            tooltip: {
-                callbacks: {
-                    label: function(context) {
-                        return `Attendance: ${context.parsed.y}`;
-                    }
-                }
-            }
-        },
+        plugins: { legend: { display: false } },
         scales: {
-            y: { 
-                beginAtZero: true, 
-                ticks: { precision: 0, color: '#9297b0' }, 
-                grid: { color: 'rgba(255,255,255,0.06)' },
-                title: {
-                    display: true,
-                    text: 'Number of Students'
-                }
-            },
-            x: { 
-                ticks: { color: '#9297b0' }, 
-                grid: { display: false }
-            }
+            y: { beginAtZero: true, ticks: { precision: 0, color: '#9297b0' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+            x: { ticks: { color: '#9297b0' }, grid: { display: false } }
         }
     }
 });

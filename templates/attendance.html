@@ -4,7 +4,7 @@
 <div class="page-header">
     <div>
         <h1>Take Attendance</h1>
-        <p>Capture or upload a photo to check in.</p>
+        <p>Capture a photo to check in.</p>
     </div>
 </div>
 
@@ -30,9 +30,6 @@
                     <small>
                         <i data-lucide="map-pin" style="width:11px;height:11px; vertical-align:-1px;"></i>
                         {{ result.location.distance_meters|round|int }}m from campus
-                        {% if result.location.verified == false %}
-                            <span class="badge badge-warning">Unverified</span>
-                        {% endif %}
                     </small>
                 </div>
             {% endif %}
@@ -46,23 +43,14 @@
     <div class="capture-frame">
         <video id="video" autoplay muted playsinline></video>
         <img id="preview" class="preview" style="display:none;">
-        <div class="capture-guide" id="guide">
-            <div class="instructions">
-                <p align="center">Position your face in the frame</p>
-                <ul>
-                    <li>Ensure good lighting</li>
-                    <li>Look directly at the camera</li>
-                    <li>Remove hats, sunglasses, or masks</li>
-                </ul>
-            </div>
-        </div>
+        <div class="capture-guide" id="guide"></div>
+        <div id="face-status" class="face-status">Position your face in the frame</div>
     </div>
     <canvas id="canvas" style="display:none;"></canvas>
 
     <div class="capture-controls">
         <button type="button" id="capture-btn" class="btn"><i data-lucide="camera"></i> Capture Photo</button>
         <button type="button" id="retake-btn" class="btn" style="display:none;"><i data-lucide="rotate-ccw"></i> Retake</button>
-        <button type="button" id="analyze-btn" class="btn" style="display:none;"><i data-lucide="eye"></i> Analyze Face</button>
     </div>
 
     <input type="hidden" name="snapshot" id="snapshot">
@@ -77,20 +65,10 @@
     <input type="hidden" name="accuracy" id="accuracy">
     {% endif %}
 
-    <div id="analysis-result" style="display:none; margin-top: 15px; padding: 10px; border-radius: 4px; background-color: #f8f9fa;">
-        <h4>Face Analysis</h4>
-        <div id="analysis-details"></div>
-    </div>
-
-    <h3 class="mt-24">Or Upload a Photo</h3>
-    <input type="file" name="face_image" accept="image/*" id="upload-input">
-    <div id="upload-preview" style="margin-top: 10px;"></div>
-
     <button type="submit" class="btn-primary btn-block mt-24" id="submit-btn">
         <i data-lucide="scan-face"></i> Check Attendance
     </button>
 </form>
-
 {% endblock %}
 
 {% block scripts %}
@@ -101,50 +79,12 @@ const preview = document.getElementById('preview');
 const guide = document.getElementById('guide');
 const captureBtn = document.getElementById('capture-btn');
 const retakeBtn = document.getElementById('retake-btn');
-const analyzeBtn = document.getElementById('analyze-btn');
 const snapshotInput = document.getElementById('snapshot');
 const form = document.getElementById('attendance-form');
 const submitBtn = document.getElementById('submit-btn');
-const analysisResult = document.getElementById('analysis-result');
-const analysisDetails = document.getElementById('analysis-details');
-const uploadInput = document.getElementById('upload-input');
-const uploadPreview = document.getElementById('upload-preview');
 
 const capture = new FaceCapture(video, canvas);
 capture.start();
-
-// Load stats on page load
-function loadStats() {
-    fetch('/api/attendance/stats')
-        .then(response => response.json())
-        .then(data => {
-            document.getElementById('present-count').textContent = data.today_present || 0;
-            document.getElementById('total-students').textContent = data.total_students || 0;
-            
-            const attendanceRate = data.total_students > 0 ? 
-                Math.round((data.today_present / data.total_students) * 100) : 0;
-            document.getElementById('attendance-rate').textContent = `${attendanceRate}%`;
-            
-            // Show recent check-ins
-            const recentDiv = document.getElementById('recent-checkins');
-            if (data.recent_records && data.recent_records.length > 0) {
-                recentDiv.innerHTML = '<ul>' + data.recent_records.map(record => 
-                    `<li><strong>${record.student_name}</strong> - ${record.time} (${Math.round(record.confidence * 100)}%)</li>`
-                ).join('') + '</ul>';
-            } else {
-                recentDiv.textContent = 'No recent check-ins';
-            }
-            
-            document.getElementById('stats-loading').style.display = 'none';
-            document.getElementById('stats-content').style.display = 'block';
-        })
-        .catch(error => {
-            console.error('Error loading stats:', error);
-            document.getElementById('stats-loading').textContent = 'Failed to load stats';
-        });
-}
-
-loadStats();
 
 captureBtn.addEventListener('click', () => {
     const dataUrl = capture.capture();
@@ -155,7 +95,6 @@ captureBtn.addEventListener('click', () => {
     guide.style.display = 'none';
     captureBtn.style.display = 'none';
     retakeBtn.style.display = 'inline-flex';
-    analyzeBtn.style.display = 'inline-flex';
 });
 
 retakeBtn.addEventListener('click', () => {
@@ -165,85 +104,20 @@ retakeBtn.addEventListener('click', () => {
     guide.style.display = 'block';
     captureBtn.style.display = 'inline-flex';
     retakeBtn.style.display = 'none';
-    analyzeBtn.style.display = 'none';
-    analysisResult.style.display = 'none';
-});
-
-analyzeBtn.addEventListener('click', () => {
-    // snapshotInput.value should be a data URL produced by webcam.js.
-    // If video metadata wasn't ready, capture() returns '' and this avoids a 400.
-    if (snapshotInput.value && snapshotInput.value.startsWith('data:image/')) {
-        // Create form data to send to backend for analysis
-        const formData = new FormData();
-        formData.append('image_data', snapshotInput.value);
-        
-        // Show loading state
-        analysisDetails.innerHTML = '<p>Analyzing face quality...</p>';
-        analysisResult.style.display = 'block';
-        
-        fetch('/api/face/analyze', {
-            method: 'POST',
-            body: formData
-        })
-        .then(async response => {
-            // Check if response is ok before parsing
-            if (!response.ok) {
-                // Try to get error details
-                let errorText = `HTTP error! status: ${response.status}`;
-                try {
-                    const errorData = await response.text();
-                    errorText += ` - ${errorData.substring(0, 100)}...`; // Limit error length
-                } catch (e) {
-                    // If we can't parse the error, just use the status
-                }
-                throw new Error(errorText);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.success === false) {
-                // Handle specific error cases
-                analysisDetails.innerHTML = `<p>Error: ${Array.isArray(data.quality_warnings) ? data.quality_warnings.join(', ') : data.quality_warnings || 'Unknown error'}</p>`;
-            } else if (data.has_face) {
-                analysisDetails.innerHTML = '<p>Quality assessment:</p><ul>' + 
-                    (Array.isArray(data.quality_warnings) ? data.quality_warnings.map(warning => `<li>${warning}</li>`).join('') : `<li>${data.quality_warnings || 'Good quality'}</li>`) + 
-                    '</ul>' +
-                    '<p>Liveness check: ' + (data.metrics && data.metrics.liveness_check_passed ? 'Passed' : 'Failed') + '</p>';
-            } else {
-                analysisDetails.innerHTML = '<p>No face detected in the image</p>';
-            }
-        })
-        .catch(error => {
-            console.error('Analysis error:', error);
-            analysisDetails.innerHTML = `<p>Could not analyze face quality: ${error.message}</p>`;
-        });
-    } else {
-        analysisDetails.innerHTML = '<p>Please capture an image first</p>';
-        analysisResult.style.display = 'block';
-    }
-});
-
-// Handle file upload preview
-uploadInput.addEventListener('change', function(e) {
-    if (this.files && this.files[0]) {
-        const reader = new FileReader();
-        
-        reader.onload = function(e) {
-            uploadPreview.innerHTML = `
-                <div style="margin-top: 10px;">
-                    <img src="${e.target.result}" style="max-width: 200px; max-height: 200px; border: 1px solid #ddd; border-radius: 4px;">
-                    <p><small>Uploaded image preview</small></p>
-                </div>
-            `;
-        }
-        
-        reader.readAsDataURL(this.files[0]);
-    }
 });
 
 form.addEventListener('submit', () => {
     setBusy(submitBtn, 'Checking…');
 });
+
+// Add face detection status update
+function updateFaceDetectionStatus(isFaceDetected) {
+    const faceStatus = document.getElementById('face-status');
+    if (faceStatus) {
+        faceStatus.textContent = isFaceDetected ? '✓ Face detected!' : 'Position your face in the frame';
+        faceStatus.className = isFaceDetected ? 'face-status face-status-detected' : 'face-status face-status-not-detected';
+    }
+}
 
 {% if geofence_settings and geofence_settings.enabled %}
 // Request location once on page load -- this is a kiosk-style, one-shot

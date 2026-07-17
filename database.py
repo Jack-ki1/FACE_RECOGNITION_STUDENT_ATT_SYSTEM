@@ -1,40 +1,27 @@
 """
 database.py
------------
-SQLAlchemy ORM models and connection setup.
+------------
+SQLAlchemy models.
 
-This file defines the database schema as three tables:
+    Student           - a registered student. image_folder points to their
+                         private photo directory (NOT under /static -- see
+                         face_engine.py and the /media route in app.py for why).
+    AttendanceRecord   - one row per "present" event.
 
-    students (Student)              -- registered people who can check in
-    attendance_records (AttendanceRecord) -- individual check-ins, tied to students
-    alembic_version                 -- migration tracking (managed by Alembic)
+Note on `confidence`: this is now a cosine-similarity score (roughly 0-1,
+occasionally slightly negative for a very bad match) rather than a softmax
+probability, since recognition switched from a trained classifier to
+embedding similarity matching. See face_engine.py for details.
 
-Each student has:
-    - A unique student_id (used as a folder name under DATASET_DIR)
-    - A display name
-    - A reference to their image folder (filled in by app.register_student)
-    - Created at timestamp
-    - Last seen timestamp (last attendance date)
-    - Account status (active/inactive)
-
-Each attendance record has:
-    - A foreign key to a student (student_pk)
-    - Date and time of check-in
-    - Confidence score from face recognition
-    - Optional location data (lat/lng, distance from campus center, verification status)
-    - Device information (browser/device type)
-    - IP address of the check-in
-    - Session identifier
-
-This file also contains the lightweight migration runner, which handles schema
-changes that are too small to justify pulling in Alembic (a full migration
-framework) -- currently just the location columns added in a later revision.
-
-The models themselves are intentionally minimal; business logic lives in app.py
-and face_engine.py, not here.
+Note on location fields: latitude/longitude/distance_meters/location_verified
+are nullable and only populated when geofencing is enabled (see geofence.py).
+Existing databases from before this feature was added won't have these
+columns -- run_lightweight_migrations() below adds them on startup via plain
+ALTER TABLE statements, so there's no need for a full migration framework
+for a handful of nullable columns on SQLite.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 
@@ -49,8 +36,6 @@ class Student(db.Model):
     name = db.Column(db.String(100), nullable=False)
     image_folder = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen = db.Column(db.DateTime)  # Last attendance date
-    active = db.Column(db.Boolean, default=True)  # Account status
 
     # cascade="all, delete-orphan" so deleting a student also deletes their
     # attendance history in one db.session.delete(student) call.
@@ -64,6 +49,13 @@ class Student(db.Model):
 
 class AttendanceRecord(db.Model):
     __tablename__ = "attendance_records"
+    __table_args__ = (
+        # Belt-and-suspenders against the check-then-insert race in
+        # app.py's attendance route: two near-simultaneous requests for the
+        # same student on the same day can't both slip through as separate
+        # rows even if the app-level "already marked?" check races.
+        db.UniqueConstraint("student_pk", "date", name="uq_student_date"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     student_pk = db.Column(db.Integer, db.ForeignKey("students.id"), nullable=False)
@@ -76,16 +68,6 @@ class AttendanceRecord(db.Model):
     longitude = db.Column(db.Float, nullable=True)
     distance_meters = db.Column(db.Float, nullable=True)
     location_verified = db.Column(db.Boolean, nullable=True)  # None = geofencing was off for this check-in
-    
-    # Additional fields for enhanced functionality
-    device_info = db.Column(db.String(200))  # Browser/device info
-    ip_address = db.Column(db.String(45))    # IP address of check-in
-    session_id = db.Column(db.String(100))   # Session identifier
-
-    # Composite unique constraint: one check-in per student per day
-    __table_args__ = (
-        db.UniqueConstraint("student_pk", "date", name="uq_student_date"),
-    )
 
     def __repr__(self):
         return f"<AttendanceRecord student_pk={self.student_pk} date={self.date}>"
@@ -93,81 +75,37 @@ class AttendanceRecord(db.Model):
 
 def run_lightweight_migrations(engine):
     """
-    Run schema updates too small to justify a full migration framework.
-    
-    Checks the current schema against expected state and applies deltas as
-    needed. This is run automatically at boot time by app.py.
+    Adds any columns/indexes that exist on the current models but not yet in
+    an existing SQLite database file -- covers upgrading a deployment that
+    predates the geofencing columns or the uq_student_date constraint,
+    without needing Alembic for a handful of nullable columns and one index.
+    Safe to call every startup; it's a no-op once caught up.
     """
     with engine.connect() as conn:
-        # Check for location columns (added after initial release)
-        result = conn.execute(text("PRAGMA table_info(attendance_records)")).fetchall()
-        existing_columns = {row[1] for row in result}
-        
-        # Add location-related columns if missing
-        location_columns = {
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(attendance_records)"))}
+        new_columns = {
             "latitude": "FLOAT",
             "longitude": "FLOAT",
             "distance_meters": "FLOAT",
-            "location_verified": "BOOLEAN"
+            "location_verified": "BOOLEAN",
         }
-        
-        for col_name, col_type in location_columns.items():
-            if col_name not in existing_columns:
-                conn.execute(text(f"ALTER TABLE attendance_records ADD COLUMN {col_name} {col_type}"))
-        
-        # Add enhanced functionality columns to attendance_records if missing
-        enhanced_columns = {
-            "device_info": "VARCHAR(200)",
-            "ip_address": "VARCHAR(45)",
-            "session_id": "VARCHAR(100)"
-        }
-        
-        for col_name, col_type in enhanced_columns.items():
-            if col_name not in existing_columns:
-                conn.execute(text(f"ALTER TABLE attendance_records ADD COLUMN {col_name} {col_type}"))
-        
-        # Add new student columns if missing
-        result = conn.execute(text("PRAGMA table_info(students)")).fetchall()
-        existing_student_columns = {row[1] for row in result}
-        
-        student_columns = {
-            "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
-            "last_seen": "DATETIME",
-            "active": "BOOLEAN DEFAULT 1"
-        }
-        
-        for col_name, col_def in student_columns.items():
-            if col_name not in existing_student_columns:
-                conn.execute(text(f"ALTER TABLE students ADD COLUMN {col_name} {col_def}"))
-        
-        # Create unique index for student/date constraint if needed
+        for name, col_type in new_columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE attendance_records ADD COLUMN {name} {col_type}"))
+        conn.commit()
+
+        # SQLite can't ALTER TABLE to add a constraint after the fact, but a
+        # unique index enforces the same guarantee. If a pre-existing database
+        # somehow already has duplicate (student_pk, date) rows, this will
+        # fail -- caught and logged rather than blocking startup, since that
+        # would turn a data-quality issue into a launch-blocking outage.
         try:
             conn.execute(text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_student_date "
                 "ON attendance_records(student_pk, date)"
             ))
+            conn.commit()
         except Exception as e:
             print(f"[database] Could not create uq_student_date index (likely pre-existing duplicate "
                   f"rows) -- duplicate same-day attendance rows are not blocked at the DB level "
                   f"until this is resolved manually. Error: {e}")
-
-
-def update_last_seen(student_id):
-    """Update the last seen timestamp for a student."""
-    student = Student.query.filter_by(student_id=student_id).first()
-    if student:
-        student.last_seen = db.func.current_timestamp()
-        db.session.commit()
-
-
-def get_active_students_count():
-    """Get count of students who have been active recently."""
-    # Count students who have attended in the last 30 days
-    thirty_days_ago = datetime.now() - timedelta(days=30)
-    
-    active_count = db.session.query(Student).filter(
-        Student.active == True,
-        Student.last_seen >= thirty_days_ago
-    ).count()
-    
-    return active_count

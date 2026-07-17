@@ -49,45 +49,52 @@
     --shadow-lg: 0 24px 60px -20px rgba(0, 0, 0, 0.65);
     --blur: blur(20px);
 
-    --font-display: 'Space Grotesk', 'Inter', sans-serif;
-    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    /* Light theme variables */
+    --light-bg: #ffffff;
+    --light-bg-elevated: #f8fafc;
+    --light-surface: rgba(255, 255, 255, 0.85);
+    --light-surface-solid: #ffffff;
+    --light-surface-hover: rgba(241, 245, 249, 0.8);
+    --light-border: rgba(0, 0, 0, 0.08);
+    --light-border-strong: rgba(0, 0, 0, 0.16);
+    --light-text: #0f172a;
+    --light-text-muted: #64748b;
+    --light-text-faint: #94a3b8;
+    --light-success: #10b981;
+    --light-success-bg: rgba(16, 185, 129, 0.12);
+    --light-danger: #ef4444;
+    --light-danger-bg: rgba(239, 68, 68, 0.12);
+    --light-warning: #f59e0b;
+    --light-warning-bg: rgba(245, 158, 11, 0.12);
+
+    /* Fonts */
+    --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 }
 
-/* Light theme variables */
-.light-theme {
-    --bg: #f8fafc;
-    --bg-elevated: #f1f5f9;
-    --surface: rgba(255, 255, 255, 0.85);
-    --surface-solid: #ffffff;
-    --surface-hover: rgba(241, 245, 249, 0.8);
-    --border: rgba(0, 0, 0, 0.08);
-    --border-strong: rgba(0, 0, 0, 0.16);
+/* Light theme overrides */
+[data-theme="light"] {
+    /* Surfaces */
+    --bg: var(--light-bg);
+    --bg-elevated: var(--light-bg-elevated);
+    --surface: var(--light-surface);
+    --surface-solid: var(--light-surface-solid);
+    --surface-hover: var(--light-surface-hover);
+    --border: var(--light-border);
+    --border-strong: var(--light-border-strong);
 
-    --text: #1e293b;
-    --text-muted: #64748b;
-    --text-faint: #94a3b8;
+    /* Text */
+    --text: var(--light-text);
+    --text-muted: var(--light-text-muted);
+    --text-faint: var(--light-text-faint);
 
-    --aurora-1: #7c3aed;
-    --aurora-2: #db2777;
-    --aurora-3: #d97706;
-    --aurora-gradient: linear-gradient(120deg, var(--aurora-1) 0%, var(--aurora-2) 55%, var(--aurora-3) 100%);
-    --aurora-gradient-soft: linear-gradient(120deg, rgba(124, 58, 237, 0.16) 0%, rgba(219, 39, 119, 0.14) 55%, rgba(217, 119, 6, 0.12) 100%);
-    --accent: #7c3aed;
-    --accent-soft: rgba(124, 58, 237, 0.14);
-
-    --geo: #0d9488;
-    --geo-soft: rgba(13, 148, 136, 0.14);
-
-    --success: #10b981;
-    --success-bg: rgba(16, 185, 129, 0.12);
-    --danger: #e11d48;
-    --danger-bg: rgba(225, 29, 72, 0.12);
-    --warning: #f59e0b;
-    --warning-bg: rgba(245, 158, 11, 0.12);
-    
-    background-image: radial-gradient(ellipse 900px 500px at 10% -10%, rgba(139, 92, 246, 0.05), transparent 60%),
-                      radial-gradient(ellipse 700px 500px at 100% 0%, rgba(236, 72, 153, 0.03), transparent 55%),
-                      radial-gradient(ellipse 800px 600px at 50% 100%, rgba(245, 158, 11, 0.02), transparent 60%);
+    /* Status */
+    --success: var(--light-success);
+    --success-bg: var(--light-success-bg);
+    --danger: var(--light-danger);
+    --danger-bg: var(--light-danger-bg);
+    --warning: var(--light-warning);
+    --warning-bg: var(--light-warning-bg);
 }
 
 * { box-sizing: border-box; }
@@ -102,14 +109,17 @@ body {
     background-attachment: fixed;
     color: var(--text);
     font-family: var(--font-body);
-    line-height: 1.55;
+    line-height: 1.6;
     min-height: 100vh;
+    font-feature-settings: "liga" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-.light-theme body {
-    background-image: radial-gradient(ellipse 900px 500px at 10% -10%, rgba(139, 92, 246, 0.05), transparent 60%),
-                      radial-gradient(ellipse 700px 500px at 100% 0%, rgba(236, 72, 153, 0.03), transparent 55%),
-                      radial-gradient(ellipse 800px 600px at 50% 100%, rgba(245, 158, 11, 0.02), transparent 60%);
+/* Light theme background removal */
+[data-theme="light"] body {
+    background: var(--light-bg);
+    background-image: none;
 }
 
 h1, h2, h3, h4 {
@@ -152,10 +162,6 @@ small { color: var(--text-faint); }
     gap: 12px;
 }
 
-.light-theme .navbar {
-    background: rgba(255, 255, 255, 0.75);
-}
-
 .navbar .brand {
     display: flex;
     align-items: center;
@@ -166,13 +172,105 @@ small { color: var(--text-faint); }
     color: var(--text);
 }
 
-.brand-icon {
-    width: 36px; height: 36px;
-    border-radius: 11px;
-    background: var(--aurora-gradient);
-    display: flex; align-items: center; justify-content: center;
-    color: #fff;
-    box-shadow: 0 4px 14px -4px rgba(139, 92, 246, 0.6);
+/* Theme toggle button */
+.theme-toggle-btn {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 8px;
+    margin-left: 12px;
+    transition: all 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+    background: var(--surface-hover);
+    transform: translateY(-2px);
+}
+
+.theme-icon {
+    width: 20px;
+    height: 20px;
+}
+
+.sun-icon {
+    display: inline;
+}
+
+.moon-icon {
+    display: none;
+}
+
+/* For light theme, swap the icon visibility */
+[data-theme="light"] .sun-icon {
+    display: none;
+}
+
+[data-theme="light"] .moon-icon {
+    display: inline;
+}
+
+/* Light theme navbar */
+[data-theme="light"] .navbar {
+    background: rgba(255, 255, 255, 0.75);
+    border-bottom: 1px solid var(--border);
+}
+
+/* Global loader overlay */
+.loader-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    background-image:
+        radial-gradient(ellipse 900px 500px at 10% -10%, rgba(139, 92, 246, 0.16), transparent 60%),
+        radial-gradient(ellipse 700px 500px at 100% 0%, rgba(236, 72, 153, 0.10), transparent 55%),
+        radial-gradient(ellipse 800px 600px at 50% 100%, rgba(245, 158, 11, 0.06), transparent 60%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    flex-direction: column;
+    gap: 16px;
+}
+
+[data-theme="light"] .loader-overlay {
+    background: var(--bg);
+    background-image: none;
+}
+
+.loader-spinner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: var(--text);
+    padding: 32px;
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+}
+
+.loader-icon {
+    width: 32px;
+    height: 32px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
 
 .nav-links { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
@@ -406,7 +504,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--aurora-1); }
    Webcam / capture UI
    --------------------------------------------------------------------- */
 .capture-frame {
-    position: relative; width: 100%; max-width: 380px;
+    position: relative; width: 100%; max-width: 500px;
     border-radius: var(--radius-md); overflow: hidden; background: #000;
     border: 1px solid var(--border-strong);
 }
@@ -417,6 +515,30 @@ input[type="checkbox"] { width: auto; accent-color: var(--aurora-1); }
     border-radius: 50% / 40%;
     pointer-events: none;
 }
+
+/* Face detection status */
+.face-status {
+    position: absolute;
+    bottom: 10px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    font-size: 0.9rem;
+    z-index: 10;
+}
+
+.face-status-detected {
+    background: rgba(34, 197, 94, 0.8) !important;
+    color: white !important;
+}
+
+.face-status-not-detected {
+    background: rgba(0, 0, 0, 0.6) !important;
+}
+
 .capture-controls { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 .thumbnails { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .thumb { width: 62px; height: 62px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); }
@@ -485,17 +607,6 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
 .pill-geo-ok { background: var(--geo-soft); color: var(--geo); }
 .pill-geo-fail { background: var(--danger-bg); color: var(--danger); }
 .pill-geo-off { background: rgba(255,255,255,0.06); color: var(--text-faint); }
-.pill-info { background: rgba(167, 139, 250, 0.14); color: var(--accent); }
-.pill-muted { background: rgba(255,255,255,0.06); color: var(--text-faint); }
-
-/* Confidence badge styling */
-.confidence-badge {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 600;
-}
 
 /* ---------------------------------------------------------------------
    Filter bar

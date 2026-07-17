@@ -1,11 +1,76 @@
+# Python related
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Distribution / packaging
+.DS_Store
+.git/
+.svn/
+.npm/
+node_modules/
+bower_components/
+
+# Logs
+*.log
+logs/
+
+# Data directories (these will be mounted or created at runtime)
+data/
+*.db
+*.sqlite
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local environment settings
+.env
+.local
+*.env
+.settings/
+
+# Test and coverage reports
+.coverage
+htmlcov/
+.pytest_cache/
+.hypothesis/
+
+# Compiled files
+*.so
+*.dylib
+*.dll
+
+# Large datasets or models that aren't needed in the container
+models/
+datasets/
+*.h5
+*.pb
+*.tflite
+*.onnx
+
+# Git related (from original)
 .git
 .gitignore
-__pycache__/
-*.pyc
-.venv/
-venv/
-data/
+
+# Instance folder (from original)
 instance/
-*.db
-.DS_Store
+
+# README old (from original)
 README_old.md

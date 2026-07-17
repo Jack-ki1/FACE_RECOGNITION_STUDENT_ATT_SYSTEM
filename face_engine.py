@@ -33,36 +33,12 @@ Pipeline for a single photo:
                 second-best candidate by at least MATCH_MARGIN -- the margin
                 check is what catches "two plausible but wrong" matches that
                 a bare threshold would let through.
-                
-Enhanced features:
-  6. LIVENESS DETECTION - Basic liveness detection to prevent photo attacks
-  7. CONFIDENCE ADJUSTMENT - Adaptive confidence scoring based on image quality
 """
 
 import os
 import json
 import numpy as np
 import config
-
-# Set environment variable to disable oneDNN optimizations to fix LZ4 library issues
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-
-# Suppress TensorFlow warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress INFO and WARNING logs
-
-try:
-    # Import TensorFlow with proper error handling
-    import tensorflow as tf
-    
-    # Configure TensorFlow to reduce resource usage and avoid initialization issues
-    tf.config.experimental.enable_tensor_float_32_execution(False)
-    
-    # Disable GPU to avoid potential issues with GPU initialization
-    tf.config.set_visible_devices([], 'GPU')
-    
-except ImportError:
-    print("[face_engine] TensorFlow not available - install with 'pip install tensorflow'")
-    tf = None
 
 try:
     import cv2
@@ -101,6 +77,7 @@ def _get_mtcnn():
     if _mtcnn_detector is None:
         try:
             from mtcnn import MTCNN
+            # Initialize MTCNN with default parameters (MTCNN doesn't support min_face_size parameter)
             _mtcnn_detector = MTCNN()
         except ImportError:
             print("[face_engine] MTCNN not available - install with 'pip install mtcnn'")
@@ -128,7 +105,8 @@ def detect_face(image_bgr):
                 image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
                 results = mtcnn.detect_faces(image_rgb)
                 if results:
-                    best = max(results, key=lambda r: r.get("confidence", 0))
+                    # Find the largest face instead of just the most confident
+                    best = max(results, key=lambda r: r["box"][2] * r["box"][3])  # width * height
                     x, y, w, h = best["box"]
                     x, y = max(0, x), max(0, y)
                     face = image_bgr[y:y + h, x:x + w]
@@ -138,32 +116,40 @@ def detect_face(image_bgr):
                 print(f"[face_engine] MTCNN detection failed: {e}")
         return None
         
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    faces = _haar_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
+    try:
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        # Use more relaxed parameters for face detection to catch more faces in uploaded images
+        faces = _haar_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(30, 30))
 
-    if len(faces) > 0:
-        x, y, w, h = max(faces, key=lambda box: box[2] * box[3])
-        return image_bgr[y:y + h, x:x + w]
+        if len(faces) > 0:
+            # Select the largest face (most likely to be the main subject)
+            x, y, w, h = max(faces, key=lambda box: box[2] * box[3])
+            return image_bgr[y:y + h, x:x + w]
 
-    # Haar found nothing -- try MTCNN, which copes much better with angled
-    # faces, partial occlusion, and tricky lighting (at the cost of being
-    # slower, which is fine for a one-shot attendance check).
-    mtcnn = _get_mtcnn()
-    if mtcnn is not None:
-        try:
-            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            results = mtcnn.detect_faces(image_rgb)
-            if results:
-                best = max(results, key=lambda r: r.get("confidence", 0))
-                x, y, w, h = best["box"]
-                x, y = max(0, x), max(0, y)
-                face = image_bgr[y:y + h, x:x + w]
-                if face.size > 0:
-                    return face
-        except Exception as e:
-            print(f"[face_engine] MTCNN fallback failed: {e}")
-    else:
-        print("[face_engine] MTCNN not available, skipping fallback detection")
+        # Haar found nothing -- try MTCNN, which copes much better with angled
+        # faces, partial occlusion, and tricky lighting (at the cost of being
+        # slower, which is fine for a one-shot attendance check).
+        mtcnn = _get_mtcnn()
+        if mtcnn is not None:
+            try:
+                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                results = mtcnn.detect_faces(image_rgb)
+                if results:
+                    # Find the largest face instead of just the most confident
+                    best = max(results, key=lambda r: r["box"][2] * r["box"][3])  # width * height
+                    x, y, w, h = best["box"]
+                    x, y = max(0, x), max(0, y)
+                    face = image_bgr[y:y + h, x:x + w]
+                    if face.size > 0:
+                        return face
+            except Exception as e:
+                print(f"[face_engine] MTCNN fallback failed: {e}")
+        else:
+            print("[face_engine] MTCNN not available, skipping fallback detection")
+
+    except Exception as e:
+        print(f"[face_engine] Error in detect_face: {e}")
+        return None
 
     return None
 
@@ -176,9 +162,6 @@ def assess_quality(face_bgr):
     rather than silently accepting a bad photo that hurts accuracy later.
     """
     warnings = []
-    if cv2 is None:
-        return warnings
-        
     gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
 
@@ -198,71 +181,45 @@ def assess_quality(face_bgr):
     return warnings
 
 
-def detect_liveness(face_bgr):
-    """
-    Basic liveness detection to prevent photo attacks.
-    Checks for micro-movements and texture patterns that distinguish real faces from photos.
-    """
-    if cv2 is None:
-        return True  # If OpenCV not available, assume liveness is OK to not block functionality
-    
-    # Convert to grayscale for analysis
-    gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
-    
-    # Calculate various texture features that differ between real faces and photos
-    # This is a simplified liveness check - in production, more sophisticated methods would be used
-    
-    # 1. Check for JPEG artifacts (common in displayed photos)
-    # Calculate the DCT coefficients and look for quantization patterns
-    try:
-        # Resize to a standard size for consistent analysis
-        resized = cv2.resize(gray, (128, 128))
-        
-        # Simple check: photos often have more uniform regions than real faces
-        # Calculate the variance of local gradients
-        grad_x = cv2.Sobel(resized, cv2.CV_64F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(resized, cv2.CV_64F, 0, 1, ksize=3)
-        gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
-        
-        # Real faces typically have more varied textures than photos
-        gradient_variance = np.var(gradient_magnitude)
-        
-        # Threshold based on empirical observation
-        # Higher values indicate more texture variation (likely real face)
-        liveness_score = gradient_variance
-        
-        # For this simple implementation, we'll consider faces with higher texture variance as live
-        is_live = liveness_score > 100  # Adjust threshold as needed based on testing
-        
-        return is_live
-    except:
-        # If liveness detection fails, assume it's OK to not block functionality
-        return True
-
-
 # ---------------------------------------------------------------------------
 # Preprocessing + embedding extraction
 # ---------------------------------------------------------------------------
 def preprocess_face(face_bgr):
     """Resize to IMG_SIZE and normalize the way MobileNetV2 expects (pixels -> [-1, 1])."""
-    if tf is None:
-        print("[face_engine] TensorFlow not available, cannot preprocess face")
-        return None
-    
-    # Apply TensorFlow compatibility fix for versions >= 2.11 on Windows
-    try:
-        from keras.applications.mobilenet_v2 import preprocess_input
-    except (AttributeError, ImportError):
-        # Fallback for newer TensorFlow versions where keras submodules are accessed differently
-        try:
-            from keras.applications.mobilenet_v2 import preprocess_input
-        except ImportError:
-            # Final fallback
-            from keras.applications.mobilenet_v2 import preprocess_input
-    
-    face_resized = cv2.resize(face_bgr, (config.IMG_SIZE, config.IMG_SIZE))
+    from keras.applications.mobilenet_v2 import preprocess_input
+
+    if face_bgr is None:
+        raise ValueError("preprocess_face(): received None")
+
+    if not isinstance(face_bgr, np.ndarray):
+        raise TypeError(f"preprocess_face(): expected numpy array, got {type(face_bgr)}")
+
+    if face_bgr.ndim != 3 or face_bgr.shape[2] != 3:
+        raise ValueError(f"preprocess_face(): expected HxWx3 BGR image, got shape {face_bgr.shape}")
+
+    h, w = face_bgr.shape[:2]
+    if h <= 0 or w <= 0:
+        raise ValueError(f"preprocess_face(): empty crop with shape {face_bgr.shape}")
+
+    # OpenCV can throw on extremely small/invalid inputs; guard with sane bounds.
+    if h < 2 or w < 2:
+        raise ValueError(f"preprocess_face(): crop too small with shape {face_bgr.shape}")
+
+    face_resized = cv2.resize(face_bgr, (config.IMG_SIZE, config.IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+    if face_resized.shape[0] != config.IMG_SIZE or face_resized.shape[1] != config.IMG_SIZE:
+        raise ValueError(f"preprocess_face(): resize produced unexpected shape {face_resized.shape}")
+
     face_rgb = cv2.cvtColor(face_resized, cv2.COLOR_BGR2RGB)
-    return preprocess_input(face_rgb.astype("float32"))
+    
+    # Add explicit batch dimension before preprocessing
+    face_rgb = np.expand_dims(face_rgb, axis=0)
+    
+    out = preprocess_input(face_rgb)
+
+    if not (isinstance(out, np.ndarray) and out.shape == (1, config.IMG_SIZE, config.IMG_SIZE, 3)):
+        raise ValueError(f"preprocess_face(): unexpected output shape {getattr(out, 'shape', None)}")
+
+    return out
 
 
 _embedder = None
@@ -278,38 +235,59 @@ def _get_embedder():
     """
     global _embedder
     if _embedder is None:
-        if tf is None:
-            print("[face_engine] TensorFlow not available, cannot create embedder")
-            return None
-            
-        # Apply TensorFlow compatibility fix for versions >= 2.11 on Windows
-        try:
-            from keras.applications.mobilenet_v2 import MobileNetV2
-        except (AttributeError, ImportError):
-            # Fallback for newer TensorFlow versions where keras submodules are accessed differently
-            try:
-                from keras.applications.mobilenet_v2 import MobileNetV2
-            except ImportError:
-                # Final fallback
-                from keras.applications.mobilenet_v2 import MobileNetV2
-                
+        from keras.applications.mobilenet_v2 import MobileNetV2
+        # Disable TensorFlow optimizations during model creation to speed things up
+        import tensorflow as tf
+        tf.config.optimizer.set_jit(True)  # Enable XLA JIT compilation
+        
         _embedder = MobileNetV2(
             input_shape=(config.IMG_SIZE, config.IMG_SIZE, 3),
             include_top=False,
             weights="imagenet",
             pooling="avg"
         )
+        # Warm up the model by running a dummy prediction
+        dummy_input = np.random.rand(1, config.IMG_SIZE, config.IMG_SIZE, 3).astype('float32')
+        _embedder.predict(dummy_input, verbose=0)
     return _embedder
+
+
+def warm_up_models():
+    """
+    Warm up all models at startup to reduce latency during first use.
+    """
+    print("[face_engine] Warming up models...")
+    
+    # Initialize the embedder model
+    embedder = _get_embedder()
+    
+    # Initialize MTCNN detector
+    mtcnn = _get_mtcnn()
+    
+    print("[face_engine] Models warmed up successfully!")
+
+
+# Don't call warm_up_models at module level to avoid import issues
+# warm_up_models()
 
 
 def compute_embedding(face_bgr):
     """Returns an L2-normalized 1280-d embedding vector for a cropped face."""
     embedder = _get_embedder()
     face_array = preprocess_face(face_bgr)
-    batch = np.expand_dims(face_array, axis=0)
+
+    # The face_array already has the batch dimension from the preprocessing fix
+    batch = face_array
+    
+    # Defensive: ensure batch rank/shape is what the model expects.
+    # Model input is (None, IMG_SIZE, IMG_SIZE, 3)
+    if batch.ndim != 4 or batch.shape[1:] != (config.IMG_SIZE, config.IMG_SIZE, 3):
+        raise ValueError(f"compute_embedding(): unexpected batch shape {batch.shape}")
+
     raw = embedder.predict(batch, verbose=0)[0]
     norm = np.linalg.norm(raw)
     return (raw / norm) if norm > 0 else raw
+
 
 
 def cosine_similarity(a, b):
@@ -416,88 +394,60 @@ def match_face(image_bgr):
     """
     face = detect_face(image_bgr)
     if face is None:
+        print(f"[face_engine] No face detected in image of size {image_bgr.shape if image_bgr is not None else 'None'}")
         return {"student_id": None, "confidence": 0.0, "reason": "No face detected in the image."}
-
-    # Perform liveness check to prevent photo attacks
-    is_live = detect_liveness(face)
-    if not is_live:
-        return {"student_id": None, "confidence": 0.0, "reason": "Liveness check failed - please ensure you are presenting a real face."}
 
     gallery = load_gallery()
     if not gallery:
         return {"student_id": None, "confidence": 0.0, "reason": "No students registered yet."}
 
-    query_embedding = compute_embedding(face)
+    try:
+        query_embedding = compute_embedding(face)
+    except Exception as e:
+        # If MTCNN produced a degenerate crop, preprocessing/embedding may fail.
+        # Treat as "no usable face" rather than crashing/throwing invalid
+        # tensors through Keras.
+        print(f"[face_engine] Failed to compute embedding: {e}")
+        return {"student_id": None, "confidence": 0.0, "reason": f"Could not compute face embedding: {e}"}
 
-    best_per_student = {}
-    for student_id, embeddings in gallery.items():
-        if embeddings:  # Check if embeddings list is not empty
-            similarities = [cosine_similarity(query_embedding, e) for e in embeddings]
-            best_per_student[student_id] = max(similarities)
 
-    if not best_per_student:  # If no valid comparisons were made
+    # Use numpy for faster computation of similarities
+    student_ids = list(gallery.keys())
+    all_embeddings = []
+    student_indices = []
+    
+    for idx, student_id in enumerate(student_ids):
+        embeddings = gallery[student_id]
+        for embedding in embeddings:
+            all_embeddings.append(embedding)
+            student_indices.append(idx)
+    
+    if not all_embeddings:
         return {"student_id": None, "confidence": 0.0, "reason": "No valid face embeddings to compare against."}
+    
+    all_embeddings = np.array(all_embeddings)
+    query_embedding = np.array(query_embedding)
+    
+    # Compute similarities in batch
+    similarities = np.dot(all_embeddings, query_embedding)
+    
+    # Group by student and find best score per student
+    best_per_student = {}
+    for i, student_idx in enumerate(student_indices):
+        student_id = student_ids[student_idx]
+        similarity = similarities[i]
+        if student_id not in best_per_student or best_per_student[student_id] < similarity:
+            best_per_student[student_id] = similarity
 
     ranked = sorted(best_per_student.items(), key=lambda item: item[1], reverse=True)
     best_id, best_score = ranked[0]
     second_score = ranked[1][1] if len(ranked) > 1 else -1.0
 
     if best_score < config.MATCH_THRESHOLD:
-        return {"student_id": None, "confidence": best_score, "reason": "Face not recognized — no confident match."}
+        return {"student_id": None, "confidence": best_score, "reason": f"Face not recognized — confidence {best_score:.2f} is below threshold {config.MATCH_THRESHOLD:.2f}."}
 
     if (best_score - second_score) < config.MATCH_MARGIN and len(ranked) > 1:
         return {"student_id": None, "confidence": best_score,
                 "reason": "Match too close between two students — please retake the photo."}
 
-    # Apply quality-based confidence adjustment
-    quality_warnings = assess_quality(face)
-    quality_score = 1.0 - (len(quality_warnings) * 0.1)  # Reduce confidence for each quality issue
-    adjusted_confidence = min(best_score, best_score * quality_score)
-
-    return {"student_id": best_id, "confidence": adjusted_confidence}
-
-
-def analyze_face_quality(image_bgr):
-    """
-    Analyze face quality without performing recognition.
-    Returns detailed quality assessment for feedback to user.
-    """
-    if cv2 is None:
-        return {"error": "OpenCV not available"}
-    
-    # Detect face first
-    face = detect_face(image_bgr)
-    if face is None:
-        return {
-            "has_face": False,
-            "quality_warnings": ["No face detected in the image"],
-            "metrics": {}
-        }
-    
-    # Assess quality
-    quality_warnings = assess_quality(face)
-    
-    # Calculate additional metrics for more detailed feedback
-    gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape[:2]
-    
-    # Calculate blur metric
-    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-    
-    # Calculate brightness metrics
-    brightness = float(np.mean(gray))
-    
-    # Calculate contrast (standard deviation of pixel intensities)
-    contrast = float(np.std(gray))
-    
-    return {
-        "has_face": True,
-        "quality_warnings": quality_warnings if quality_warnings else ["Good quality"],
-        "metrics": {
-            "blur_score": blur_score,
-            "brightness": brightness,
-            "contrast": contrast,
-            "dimensions": f"{w}x{h}",
-            "liveness_check_passed": detect_liveness(face)
-        }
-    }
+    return {"student_id": best_id, "confidence": best_score}

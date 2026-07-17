@@ -22,8 +22,8 @@ class FaceCapture {
             this.stream = await navigator.mediaDevices.getUserMedia({ 
                 video: { 
                     facingMode: 'user',
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
                 }, 
                 audio: false 
             });
@@ -87,6 +87,9 @@ class FaceCapture {
                 // Update UI if available
                 if (window.updateFaceDetectionStatus) {
                     updateFaceDetectionStatus(this.faceDetected);
+                } else {
+                    // Fallback to a generic function
+                    updateFaceDetectionStatusFallback(this.faceDetected);
                 }
             }
         }, 500); // Check every 500ms
@@ -104,16 +107,8 @@ class FaceCapture {
         const canvas = this.canvas;
         const ctx = this.ctx;
 
-        // Guard against a race where video metadata isn't ready yet.
-        const w = video.videoWidth;
-        const h = video.videoHeight;
-        if (!w || !h) {
-            // Caller must treat '' as "no image".
-            return '';
-        }
-
-        canvas.width = w;
-        canvas.height = h;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         return canvas.toDataURL('image/jpeg', 0.85);
@@ -228,4 +223,25 @@ function throttle(func, limit) {
             setTimeout(() => inThrottle = false, limit);
         }
     };
+}
+
+// Add new function to update face detection status
+function updateFaceDetectionStatusFallback(isFaceDetected) {
+    const captureGuide = document.getElementById('guide');
+    if (captureGuide) {
+        if (isFaceDetected) {
+            captureGuide.style.borderColor = 'rgba(52, 211, 153, 0.6)'; // green
+            captureGuide.style.boxShadow = '0 0 0 2px rgba(52, 211, 153, 0.3)';
+        } else {
+            captureGuide.style.borderColor = 'rgba(255,255,255,0.35)';
+            captureGuide.style.boxShadow = 'none';
+        }
+    }
+    
+    // Also update a status element if it exists
+    const faceStatus = document.getElementById('face-status');
+    if (faceStatus) {
+        faceStatus.textContent = isFaceDetected ? 'Face detected!' : 'Position your face in the frame';
+        faceStatus.className = isFaceDetected ? 'face-status-detected' : 'face-status-not-detected';
+    }
 }

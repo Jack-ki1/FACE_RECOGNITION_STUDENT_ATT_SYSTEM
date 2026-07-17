@@ -1,180 +1,131 @@
+**Session & credentials**
+- Password comparison uses `hmac.compare_digest` (constant-time), not `==`.
+- Login attempts are rate-limited (5 per 5 minutes per IP) to blunt
+  brute-forcing a single shared password.
+- Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` outside of
+  debug mode.
+
+**CSRF** — every POST route requires a session-bound token, checked in an
+`app.before_request` hook. This covers registration, deletion, settings
+changes, reindexing, and login itself, closing the "malicious page tricks a
+logged-in admin's browser into submitting a form" class of attack.
+
+**Rate limiting** — beyond login, `/attendance` is capped at 20 attempts
+per minute per IP, since each attempt runs real CNN inference; without this
+an attacker (or a broken client in a retry loop) could turn the check-in
+kiosk into a CPU-exhaustion vector.
+
+**Request size limits** — `MAX_CONTENT_LENGTH` caps the whole request body
+at the Flask/Werkzeug level (so an oversized request is rejected before
+being fully read into memory), and the number of webcam captures accepted
+per registration is enforced server-side, not just by the UI's photo-count
+limit (which a hand-built request could trivially ignore).
+
+**Photo privacy** — student photos live outside `/static`, served only
+through `/media/<id>/<file>`, which is gated behind the admin login once
+one is configured, and rejects any path that doesn't survive
+`secure_filename`/character-allowlisting unchanged (blocking traversal
+attempts like `../../etc/passwd`).
+
+**Security headers** — every response gets `X-Content-Type-Options:
+nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy:
+strict-origin-when-cross-origin`, and a `Content-Security-Policy` that
+explicitly allowlists only the CDNs this app actually loads (fonts, Lucide
+icons, Leaflet, Chart.js) rather than allowing arbitrary third-party
+scripts. Inline `<script>` blocks are used throughout the templates for
+simplicity, which requires `'unsafe-inline'` on `script-src` — a
+nonce-based policy would close that specific gap for anyone hardening this
+further.
+
+**Database race conditions** — duplicate student IDs and duplicate
+same-day attendance records are guarded both at the application level
+(check-then-insert, the fast path) and at the database level (unique
+constraints, the actual guarantee) — two near-simultaneous requests can't
+both slip through the application-level check and create two rows.
+
+**Input validation** — geofence settings reject out-of-range coordinates,
+non-finite values (`NaN`/`Infinity` parse successfully in Python's
+`float()`, so this needs an explicit check), and radii too small to be
+meaningful, so a typo in `/settings` can't silently lock every student out
+with no clear error.
+
+**What this deliberately does not include** — full user accounts (it's one
+shared admin password by design, matching the original "no login system
+needed" brief while still closing the worst gaps for public hosting), and
+a nonce-based CSP (the inline-script tradeoff above). Both are reasonable
+next steps if this grows into a multi-admin, higher-stakes deployment.
+
 ---
-title: Face Attendance System
-emoji: 🎓
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-app_port: 7860
-short_description: CNN-powered student attendance via face recognition
----
-
-# Face Attendance System (v2)
-
-A Flask web app that takes student attendance using face recognition: a CNN
-(MobileNetV2) extracts a face "fingerprint" for each registered student, and
-new check-ins are matched against those fingerprints by cosine similarity.
-Built to run locally or as a Hugging Face Spaces Docker app.
-
-## What changed from v1
-
-If you're coming from the original classifier-based version, the short
-version: recognition is now instant (no `/train` step, no minimum of 2
-students), it's meaningfully more secure for public hosting, and the whole
-UI was redesigned. Full breakdown:
-
-| | v1 | v2 |
-|---|---|---|
-| Recognition | Retrained softmax classifier | MobileNetV2 embeddings + cosine similarity |
-| Adding a student | Requires retraining on everyone | Instant — no retrain |
-| Minimum students | 2 (classifier needs ≥2 classes) | 1 |
-| Stranger rejection | Softmax always picks *something* | Threshold + margin check |
-| Face detection | Haar Cascade only | Haar Cascade → MTCNN fallback |
-| Photo quality checks | None | Blur / brightness / size, with feedback |
-| Student photos | Public, under `/static` | Private, served via an authenticated route |
-| Admin access | None | Optional single-password gate (env var) |
-| Server | Flask dev server, debug on | gunicorn, debug off by default |
-| Student management | None (no delete/roster view) | Roster page with delete/re-enroll |
-| Dashboard | Table only | Stats, 7-day chart, CSV export, filters |
-| Storage | Hardcoded local paths | `DATA_DIR` env var (Spaces persistent storage-ready) |
-| UI | Basic light theme | Dark theme, cards, toasts, icons |
-
-Migrating existing data: see [Migrating from v1](#migrating-from-v1) below.
-
-## How recognition works
-
-1. **Detect** — Haar Cascade finds the face region first (fast); if it comes
-   up empty, MTCNN (a small cascaded CNN) is tried as a fallback since it
-   handles angled or partially-occluded faces better.
-2. **Quality check** — the cropped face is checked for size, blur (Laplacian
-   variance), and brightness. Registration surfaces these as warnings so bad
-   photos don't quietly hurt accuracy later.
-3. **Embed** — MobileNetV2 (frozen ImageNet weights, `pooling='avg'`) maps
-   the 96×96 face to a 1280-dimension vector. No training happens here —
-   it's pure feature extraction, which is why registering a student is
-   instant.
-4. **Match** — a new face's embedding is compared via cosine similarity
-   against every stored embedding. A match is accepted only if it clears
-   `MATCH_THRESHOLD` *and* beats the second-best candidate by at least
-   `MATCH_MARGIN` — the margin check is what catches "two plausible faces"
-   situations that a bare threshold lets through.
-
-This mirrors how production face-recognition systems are built (e.g.
-ArcFace/InsightFace-style pipelines use the same detect → embed → cosine-
-similarity-with-threshold pattern) — just with a lighter, CPU-friendly model
-appropriate for a free-tier deployment.
-
-## Project structure
-
-```
-├── app.py                # Flask routes
-├── face_engine.py         # detection, quality checks, embeddings, matching
-├── database.py             # SQLAlchemy models (Student, AttendanceRecord)
-├── auth.py                  # optional single-password admin gate
-├── config.py                  # all environment-driven settings
-├── migrate_from_v1.py           # one-time data migration helper
-├── requirements.txt
-├── Dockerfile                     # Hugging Face Spaces (Docker SDK)
-├── templates/                      # Jinja2 templates
-└── static/css, static/js            # design system + vanilla JS (no framework)
-```
-
-Data (photos, database, embeddings) lives under `DATA_DIR` (default: `./data`),
-**not** inside `static/` or the repo — see [Data & privacy](#data--privacy).
-
-## Running locally
-
-```bash
-python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
-```
-
-Open **http://127.0.0.1:7860**. `tensorflow-cpu` and `mtcnn` are sizeable
-downloads (~500MB+); first run will take a minute.
-
-Webcam capture needs the browser to grant camera permission, which most
-browsers only allow on `localhost` or HTTPS — `127.0.0.1:7860` works fine for
-local testing.
-
-## Deploying to Hugging Face Spaces
-
-1. Create a new Space, SDK = **Docker**. (Consider **private** visibility if
-   you'll register real students — see the privacy section below.)
-2. Push this project's contents to the Space repo (the `README.md`
-   frontmatter above already declares `sdk: docker` and `app_port: 7860`,
-   which is what Spaces requires).
-3. In **Settings → Variables and secrets**, set:
-   - `ADMIN_PASSWORD` (secret) — turns on the login gate for
-     registration/roster/dashboard. Strongly recommended for any public URL.
-   - `SECRET_KEY` (secret) — a random string for session signing.
-   - `DATA_DIR=/data` (variable) — **only if** you've attached a persistent
-     Storage volume to the Space (Settings → Storage). Without this,
-     everything you register is wiped on every restart/rebuild, since
-     Spaces' container filesystem is otherwise ephemeral.
-4. Push. The first build installs TensorFlow, which can take several
-   minutes — subsequent builds are cached and much faster.
-
-## Configuration reference
-
-All of these are environment variables (Space "Variables and secrets", or a
-local `.env`/shell export):
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `DATA_DIR` | `./data` | Where photos, the DB, and embeddings live |
-| `ADMIN_PASSWORD` | *(unset)* | Set to enable the admin login gate |
-| `SECRET_KEY` | dev default | Set a real random value in production |
-| `MATCH_THRESHOLD` | `0.55` | Minimum cosine similarity to accept a match |
-| `MATCH_MARGIN` | `0.05` | Best match must beat the runner-up by this much |
-| `BLUR_THRESHOLD` | `60` | Laplacian variance floor (lower = more blur allowed) |
-| `MIN_FACE_SIZE` | `80` | Minimum detected face size, in pixels |
-| `PORT` | `7860` | Only used by `python app.py`; gunicorn's `--bind` is separate |
-| `FLASK_DEBUG` | `false` | Never enable this on a public deployment |
-
-If real check-ins are being rejected too often, lower `MATCH_THRESHOLD`
-slightly; if strangers are being matched, raise it. Re-registering students
-with more/varied photos usually helps more than threshold tuning.
 
 ## Data & privacy
 
-Worth understanding before you put real students' faces in this app:
-
-- Photos and the database live under `DATA_DIR`, which is gitignored and
-  dockerignored — they will not end up in your repo history.
-- Photos are served through `/media/<id>/<file>`, not `/static` — when
-  `ADMIN_PASSWORD` is set, that route requires login.
+- Photos, the database, and geofence settings all live under `DATA_DIR`,
+  which is both `.gitignore`d and `.dockerignore`d — they will not end up
+  in your repo history or Docker image.
 - Without `ADMIN_PASSWORD` set, the app runs fully open (registration,
   roster, dashboard, photos) — fine for a local demo, not for a public URL
-  with real student data.
+  holding real student data.
 - On Hugging Face Spaces specifically: without a persistent Storage volume,
-  the container filesystem resets on restart/rebuild, so registered
-  students and attendance history disappear. Attach Storage + set
-  `DATA_DIR=/data` if you need this to persist.
-- Consider a **private** Space if this will hold real student data at all —
-  Spaces supports private visibility with access control.
+  the container filesystem resets on restart/rebuild. Attach Storage and
+  set `DATA_DIR=/data` if this needs to survive redeploys.
+- Consider a **private** Space if this will hold real student data at
+  all — Spaces supports private visibility with access control.
+- Location data (GPS coordinates, distance from campus) is stored per
+  attendance record when geofencing is on. This is meaningfully sensitive
+  data about where a real person was standing at a specific time — treat
+  the database export with the same care as the photos.
 
-## Migrating from v1
+---
 
-If you have an existing deployment with registered students:
+## Known limitations
 
-```bash
-# from inside this (v2) project's directory
-python migrate_from_v1.py /path/to/old/FACE_RECOGNITION_STUDENT_ATT_SYSTEM
-```
+- Browser GPS is spoofable (see [Geofencing](#geofencing) above) — this
+  raises the bar, it isn't cryptographic proof of presence.
+- The admin gate is one shared password, not per-user accounts with
+  individual audit trails.
+- Rate limiting is in-memory and per-process — it won't coordinate across
+  multiple gunicorn workers or replicas. Fine for the single-worker setup
+  in the included Dockerfile; would need a shared store (Redis) to scale
+  beyond that.
+- Recognition accuracy depends heavily on registration photo quality/
+  variety — 3–5 photos from different angles and lighting will noticeably
+  outperform a single selfie.
+- The Content-Security-Policy allows `'unsafe-inline'` scripts, a
+  pragmatic tradeoff for keeping templates simple; a nonce-based policy
+  would be stricter.
+- Performance may be limited on CPU-only instances when processing multiple
+  concurrent face recognition requests.
 
-This copies photos, ports the database rows, and rebuilds the embedding
-gallery in one step. Then just start the app and check `/students`.
+---
 
-## Limitations
+## Troubleshooting
 
-- No CSRF protection (Flask-WTF wasn't added, to keep dependencies light) —
-  acceptable for a single-admin-password setup, worth adding for anything
-  more sensitive.
-- The admin gate is one shared password, not per-user accounts.
-- Recognition accuracy depends heavily on registration photo quality/variety
-  — 3-5 photos from different angles and lighting will outperform one selfie.
-  Laptop/phone webcams in good lighting work best.
-- `gunicorn --workers 1` keeps memory predictable on free-tier hardware but
-  caps concurrency — bump `--workers`/`--threads` in the Dockerfile if you
-  have more headroom.
+**"No students indexed" / recognition always fails** — check `/students`
+to confirm photos were actually saved (a face has to be detected in at
+least one photo for a student to appear in the gallery). Try "Reindex
+Photos" if you've added images directly to disk.
+
+**Geofencing rejects check-ins that should be valid** — visit `/settings`
+and confirm the marker is actually on campus and the radius is generous
+enough for GPS drift (150–300m is reasonable to start). Try "flag" mode
+temporarily to see actual reported distances on the dashboard without
+blocking anyone while you tune it.
+
+**"Too many attempts" on login or attendance** — that's the rate limiter;
+wait for the window to pass (5 minutes for login, 1 minute for attendance).
+
+**Students/photos disappeared after a redeploy on Hugging Face** — you
+need a persistent Storage volume attached and `DATA_DIR=/data` set; without
+both, the container's filesystem resets on every rebuild.
+
+**400 error on a form submission** — almost always an expired/missing CSRF
+token, usually because the page was open in a tab for a long time before
+submitting. Reload the page and try again.
+
+**Slow performance on Hugging Face Spaces** — CPU instances have limited
+resources. Consider optimizing the number of concurrent users or upgrading
+the Space hardware if needed.
+
+**Build fails on Hugging Face Spaces** — First builds include TensorFlow
+which can take 10-15 minutes. Subsequent builds use cache and are faster.
+Check the build logs for specific error messages.

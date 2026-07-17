@@ -20,7 +20,8 @@
     <h3 class="mt-24">Capture from Webcam</h3>
     <div class="capture-frame">
         <video id="video" autoplay muted playsinline></video>
-        <div class="capture-guide"></div>
+        <div class="capture-guide" id="guide"></div>
+        <div id="face-status" class="face-status">Position your face in the frame</div>
     </div>
     <canvas id="canvas" style="display:none;"></canvas>
 
@@ -60,6 +61,15 @@ const TARGET_PHOTOS = 5;
 let capturedImages = [];
 const capture = new FaceCapture(video, canvas);
 capture.start();
+
+// Add face detection status update
+function updateFaceDetectionStatus(isFaceDetected) {
+    const faceStatus = document.getElementById('face-status');
+    if (faceStatus) {
+        faceStatus.textContent = isFaceDetected ? '✓ Face detected!' : 'Position your face in the frame';
+        faceStatus.className = isFaceDetected ? 'face-status face-status-detected' : 'face-status face-status-not-detected';
+    }
+}
 
 function renderDots() {
     dotsWrap.innerHTML = '';

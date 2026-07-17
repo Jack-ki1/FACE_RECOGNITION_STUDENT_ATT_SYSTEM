@@ -20,7 +20,7 @@
         When off, students can check in from anywhere (face recognition still applies).
     </div>
 
-    <div id="campus-map"></div>
+    <div id="campus-map" style="height: 400px; border-radius: var(--radius-md); margin: 16px 0;"></div>
     <div class="field-hint">
         <i data-lucide="move" style="width:12px;height:12px; vertical-align:-2px;"></i>
         Drag the marker, or click anywhere on the map, to set the campus center.
@@ -52,6 +52,19 @@
     <input type="number" id="max_accuracy_meters" name="max_accuracy_meters" min="10" max="2000" step="10"
            value="{{ geofence_settings.max_accuracy_meters }}">
     <div class="field-hint">Readings less precise than this are rejected/flagged rather than trusted.</div>
+
+    <div class="mt-16" id="location-info" style="padding: 12px; background: var(--surface); border-radius: var(--radius-md); display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <strong>Current Location:</strong><br>
+                <span id="coordinates"></span>
+            </div>
+            <div>
+                <strong>Radius:</strong><br>
+                <span id="radius-display">{{ geofence_settings.radius_meters }}m</span>
+            </div>
+        </div>
+    </div>
 
     <button type="submit" class="btn-primary btn-block mt-24"><i data-lucide="save"></i> Save Campus Settings</button>
 </form>
@@ -91,6 +104,10 @@ function setPoint(lat, lng) {
     document.getElementById('latitude').value = lat;
     document.getElementById('longitude').value = lng;
 
+    // Update location info display
+    document.getElementById('coordinates').textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    document.getElementById('location-info').style.display = 'block';
+
     if (marker) {
         marker.setLatLng([lat, lng]);
     } else {
@@ -112,12 +129,18 @@ function setPoint(lat, lng) {
     }
 }
 
-if (hasSaved) setPoint(savedLat, savedLng);
+if (hasSaved) {
+    setPoint(savedLat, savedLng);
+}
 
 map.on('click', (e) => setPoint(e.latlng.lat, e.latlng.lng));
 
 document.getElementById('radius_meters').addEventListener('input', () => {
-    if (circle) circle.setRadius(parseFloat(document.getElementById('radius_meters').value) || 300);
+    const radius = parseFloat(document.getElementById('radius_meters').value) || 300;
+    if (circle) {
+        circle.setRadius(radius);
+    }
+    document.getElementById('radius-display').textContent = radius + 'm';
 });
 
 document.getElementById('locate-btn').addEventListener('click', () => {
