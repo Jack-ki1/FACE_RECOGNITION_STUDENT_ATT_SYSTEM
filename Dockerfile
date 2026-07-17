@@ -6,34 +6,19 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    FLASK_APP=app.py
+    FLASK_APP=app.py \
+    DATA_DIR=/data
 
 # Install system dependencies required for OpenCV and other packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     build-essential \
-    cmake \
-    pkg-config \
-    libjpeg-dev \
-    libtiff5-dev \
-    libpng-dev \
-    libavcodec-dev \
-    libavformat-dev \
-    libswscale-dev \
-    libv4l-dev \
-    libxvidcore-dev \
-    libx264-dev \
-    libgtk-3-dev \
-    libatlas-base-dev \
-    gfortran \
-    libhdf5-dev \
-    libhdf5-serial-dev \
-    libhdf5-103 \
-    libqtgui4 \
-    libqtwebkit4 \
-    libqt4-test \
-    python3-dev \
-    libgl1 \
     libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgl1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user - required for HF Spaces Dev Mode and good practice generally
@@ -56,6 +41,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy the rest of the application
 COPY --chown=user . /app
 
+# Make startup script executable if it exists
+RUN if [ -f /app/startup.sh ] ; then chmod +x /app/startup.sh ; fi
+
 # Create data directory for persistent storage
 RUN mkdir -p /data
 
@@ -66,5 +54,5 @@ EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:7860/healthz || exit 1
 
-# Run the application with gunicorn
+# Run the application with gunicorn directly (without startup script to avoid potential issues)
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:7860", "--workers", "1", "--threads", "4", "--timeout", "120", "--preload"]
