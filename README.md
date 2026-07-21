@@ -290,6 +290,7 @@ code.
 | `PORT` | `7860` | Only used by `python app.py`; gunicorn's `--bind` is separate |
 | `FLASK_DEBUG` | `false` | Never enable this on a public deployment |
 | `MAX_CONTENT_LENGTH_MB` | `25` | Hard cap on any single request body, in MB |
+| `FRAME_ANCESTORS` | `'self' https://huggingface.co https://*.hf.space` | CSP `frame-ancestors` allowlist. Defaults to letting Hugging Face embed the Space in its iframe; set to `'none'` for a standalone deploy that should never be framed |
 
 ### Admin access
 

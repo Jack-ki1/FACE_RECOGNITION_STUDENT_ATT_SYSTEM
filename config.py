@@ -71,6 +71,16 @@ AUTH_ENABLED = bool(ADMIN_PASSWORD)
 DEBUG = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
 PORT = int(os.environ.get("PORT", "7860"))  # HF Spaces Docker SDK default
 
+# Hugging Face Spaces renders the app inside an iframe on huggingface.co, so
+# the app must list those origins as allowed frame ancestors -- otherwise the
+# browser refuses to load the frame and the Space shows "refused to connect".
+# Override with FRAME_ANCESTORS='none' (or a custom allowlist) for a
+# standalone deployment that should never be embedded.
+FRAME_ANCESTORS = os.environ.get(
+    "FRAME_ANCESTORS",
+    "'self' https://huggingface.co https://*.hf.space",
+).strip()
+
 # ---------------------------------------------------------------------------
 # Additional configuration options
 # ---------------------------------------------------------------------------

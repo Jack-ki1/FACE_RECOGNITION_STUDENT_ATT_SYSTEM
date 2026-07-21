@@ -113,7 +113,12 @@ def _csrf_protect():
 @app.after_request
 def _security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
+    # X-Frame-Options can't express a cross-origin allowlist (ALLOW-FROM is
+    # deprecated and ignored), so only emit the legacy DENY header when
+    # framing is fully disallowed; otherwise rely on CSP frame-ancestors,
+    # which lets Hugging Face embed the Space in its iframe.
+    if config.FRAME_ANCESTORS == "'none'":
+        response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     # Explicit allowlist for the CDNs this app actually loads (fonts, icons,
     # the map, and the chart library) rather than a blanket allow. Inline
@@ -129,7 +134,7 @@ def _security_headers(response):
         "connect-src 'self'; "
         "object-src 'none'; "
         "base-uri 'self'; "
-        "frame-ancestors 'none'"
+        f"frame-ancestors {config.FRAME_ANCESTORS}"
     )
     return response
 
