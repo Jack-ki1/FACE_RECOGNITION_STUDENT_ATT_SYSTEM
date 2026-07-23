@@ -22,12 +22,14 @@ Run in production (Docker/HF Spaces) with: gunicorn app:app --bind 0.0.0.0:$PORT
 """
 
 import os
+import sys
 import io
 import csv
 import json
 import base64
 import binascii
 import shutil
+import traceback
 from datetime import datetime, date, timedelta
 
 import cv2
@@ -41,14 +43,22 @@ from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy.exc import IntegrityError
 
-import config
-from database import db, Student, AttendanceRecord, run_lightweight_migrations
-import face_engine
-import geofence
-from auth import (
-    login_required, is_logged_in, check_password, login_limiter,
-    attendance_limiter, client_ip, get_csrf_token, csrf_protect
-)
+# Debug: catch any import failures before they silently crash gunicorn
+try:
+    import config
+    from database import db, Student, AttendanceRecord, run_lightweight_migrations
+    import face_engine
+    import geofence
+    from auth import (
+        login_required, is_logged_in, check_password, login_limiter,
+        attendance_limiter, client_ip, get_csrf_token, csrf_protect
+    )
+except Exception as e:
+    print("=" * 60, file=sys.stderr)
+    print("FATAL IMPORT ERROR:", file=sys.stderr)
+    traceback.print_exc()
+    print("=" * 60, file=sys.stderr)
+    sys.exit(1)
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = config.SQLALCHEMY_DATABASE_URI
@@ -73,6 +83,9 @@ db.init_app(app)
 _gallery_cache = None
 _gallery_last_modified = 0
 
+# Track whether models have been warmed up (deferred to first request for fast startup)
+_models_warmed = False
+
 def get_cached_gallery():
     """Get the face recognition gallery with caching to avoid frequent disk reads."""
     global _gallery_cache, _gallery_last_modified
@@ -93,16 +106,23 @@ with app.app_context():
     db.create_all()
     run_lightweight_migrations(db.engine)
 
-# Warm up face recognition models after all modules are loaded
-try:
-    face_engine.warm_up_models()
-except Exception as e:
-    print(f"[app] Warning: Could not warm up models: {e}")
-
 for warning in config.startup_warnings():
     print(f"[app] WARNING: {warning}")
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "bmp"}
+
+
+@app.before_request
+def _lazy_warmup():
+    """Defer model warm-up to first request so gunicorn starts fast and passes health checks."""
+    global _models_warmed
+    if not _models_warmed:
+        try:
+            face_engine.warm_up_models()
+            _models_warmed = True
+            print("[app] Models warmed up on first request")
+        except Exception as e:
+            print(f"[app] Warning: Could not warm up models: {e}")
 
 
 @app.before_request
@@ -113,7 +133,12 @@ def _csrf_protect():
 @app.after_request
 def _security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
+    # X-Frame-Options can't express a cross-origin allowlist (ALLOW-FROM is
+    # deprecated and ignored), so only emit the legacy DENY header when
+    # framing is fully disallowed; otherwise rely on CSP frame-ancestors,
+    # which lets Hugging Face embed the Space in its iframe.
+    if config.FRAME_ANCESTORS == "'none'":
+        response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     # Explicit allowlist for the CDNs this app actually loads (fonts, icons,
     # the map, and the chart library) rather than a blanket allow. Inline
@@ -129,7 +154,7 @@ def _security_headers(response):
         "connect-src 'self'; "
         "object-src 'none'; "
         "base-uri 'self'; "
-        "frame-ancestors 'none'"
+        f"frame-ancestors {config.FRAME_ANCESTORS}"
     )
     return response
 
@@ -356,7 +381,7 @@ def students():
     all_students = Student.query.order_by(Student.name).all()
     photos = {}
     counts = {}
-    
+
     for s in all_students:
         photos[s.student_id] = primary_photo_url(s)
         try:
@@ -368,7 +393,7 @@ def students():
                 counts[s.student_id] = 0
         except (OSError, PermissionError):
             counts[s.student_id] = 0
-    
+
     return render_template("students.html", students=all_students, photos=photos, counts=counts)
 
 
@@ -402,7 +427,7 @@ def media(student_id, filename):
     sanitized_student_id = sanitize_student_id(student_id)
     if sanitized_student_id != student_id:
         abort(404)
-        
+
     secure_filename_val = secure_filename(filename)
     if secure_filename_val != filename:
         abort(404)

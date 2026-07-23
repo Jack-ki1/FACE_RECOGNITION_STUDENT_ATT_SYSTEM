@@ -4,8 +4,8 @@ Werkzeug==3.0.3
 SQLAlchemy==2.0.32
 gunicorn==22.0.0
 tensorflow-cpu==2.16.1
-keras==3.4.1
-mtcnn==1.0.0
+keras==3.3.3          # Changed from 3.4.1 — better stability with TF 2.16
+mtcnn
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
 Pillow==10.4.0
